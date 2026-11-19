@@ -6,7 +6,13 @@ For now I start with the simplest tasks, hovering and helix trajectory tracking.
 
 The default branch is `isaac-drone/Version5`.
 
-<!-- New experiment results: video, 3D trajectory, tracking error, experiment conditions and metrics. To be added when the material arrives. -->
+## Example flight
+
+![Follow-camera view of the helix flight](docs/media/helix_follow.gif)
+
+This is a helix flight in Isaac Sim, recorded from the follow camera on 2026-10-20. The dashed green line is the reference trajectory. The helix has a radius of 1 m, 5 turns, and a 5 m climb, and the drone reaches 5.0 m/s. The run has no disturbance and no model mismatch, the controller uses the ground-truth state, and the motor response model is off. The maximum position error is 5.4 cm and the RMS error is 2.4 cm.
+
+![3D trajectory and top view of the same flight](docs/media/helix_trajectory_3d.png)
 
 ## Control flow
 
