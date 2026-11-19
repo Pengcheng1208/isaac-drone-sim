@@ -1,77 +1,77 @@
-# 服务器试飞清单：开机 → WebRTC → 回车起飞
+# Running on the Server
 
-服务器 `uc1` 当前公网 IP 为 `117.50.205.33`；实例重启后若 IP 变化，下面命令和本地 `~/.ssh/config` 中 `uc1` 的 HostName 都要同步修改。
+Replace `<SERVER_PUBLIC_IP>` in the commands below with the public IP of the server `uc1`. If the IP changes after the instance restarts, update both the commands and the HostName of `uc1` in your local `~/.ssh/config`.
 
-## 首次准备
+## First-time setup
 
 ```bash
 sudo apt install git-lfs && git lfs install
 git clone https://github.com/Desmond-Yuka/isaac-drone-sim.git ~/isaac-drone-sim
 cd ~/isaac-drone-sim
 source ~/isaacsim-6.1/env_isaacsim/bin/activate
-python -m pip install -e '.[plot]'          # 录像另加 '.[video]'
+python -m pip install -e '.[plot]'          # add '.[video]' for video recording
 ```
 
-在 Isaac Sim 的 Script Editor 里使用本仓库的模型时：
+To use the model from this repository in the Isaac Sim Script Editor, use the code below:
 
 ```python
 import sys; sys.path.insert(0, "/home/ubuntu/isaac-drone-sim")
 from isaac_drone.assets import ARL_ROBOT_1_USD
 ```
 
-## 每次试飞
+## Each flight
 
-**1. 开机**：在云服务商控制台启动实例。
+**1. Power on**: start the instance in the cloud provider's console.
 
-**2. 本地终端连服务器**
+**2. Connect to the server from a local terminal**
 
 ```bash
-tmux attach -t isaac || tmux new -s isaac    # 进入共享终端（有就接入，没有就新建）
-ssh uc1                                      # 已配置密钥登录
+tmux attach -t isaac || tmux new -s isaac    # enter the shared terminal (attach if it exists, otherwise create it)
+ssh uc1                                      # key-based login is already set up
 ```
 
-**3. 服务器准备环境**
+**3. Prepare the environment on the server**
 
 ```bash
-nvidia-smi                                   # 确认 GPU 空闲，没有残留的 Isaac Sim
+nvidia-smi                                   # check that the GPU is idle and no Isaac Sim process is left over
 cd ~/isaac-drone-sim
 git pull
 source ~/isaacsim-6.1/env_isaacsim/bin/activate
-python -m isaac_drone validate --config configs/helix.yaml   # 可选：几秒内检查配置和资产
+python -m isaac_drone validate --config configs/helix.yaml   # optional: checks the config and assets in a few seconds
 ```
 
-**4. 启动 Isaac Sim，加载场景和无人机**
+**4. Start Isaac Sim and load the scene and the drone**
 
 ```bash
-mkdir -p runs && PYTHONUNBUFFERED=1 PUBLIC_IP=117.50.205.33 python -m isaac_drone run --backend isaaclab \
+mkdir -p runs && PYTHONUNBUFFERED=1 PUBLIC_IP=<SERVER_PUBLIC_IP> python -m isaac_drone run --backend isaaclab \
     --config configs/helix.yaml --livestream 1 --wait-for-start 2>&1 | tee runs/helix_$(TZ=America/New_York date +%m%d-%H%M).log
 ```
 
-日志名与运行目录名用同一个时钟（美东时间）；服务器自己的时钟是 UTC+8，不加 `TZ=` 会差 12–13 小时。
+The log name and the run directory name use the same clock (US Eastern Time). The server's own clock is UTC+8, so without `TZ=` the two would differ by 12–13 hours.
 
-等终端出现 `Scene ready: connect the stream client, then press Enter here to start.`（通常约 1 分钟；开机后首次运行需编译着色器，可能 2–3 分钟）。此时无人机停在地上，物理不推进。
+Wait until the terminal shows `Scene ready: connect the stream client, then press Enter here to start.` This usually takes about 1 minute. The first run after power-on has to compile shaders and may take 2–3 minutes. At this point the drone sits on the ground and the physics simulation does not advance.
 
-**5. 连 WebRTC**：客户端填 Server `117.50.205.33`、Signal `49100`、Stream `47998`，点 Connect，看到操作页面和无人机。
+**5. Connect WebRTC**: in the client, enter Server `<SERVER_PUBLIC_IP>`, Signal `49100`, Stream `47998`, and click Connect. You will then see the control page and the drone.
 
-**6. 开始运行**：点一下运行命令的终端，确保输入焦点在它上面，按**回车**。任务为 20 s 仿真时间，默认按真实时间播放；物理和记录本身慢于实时时会如实变慢（uc1 串流实测约 0.3×，约 70 s，见输出里的 `playback`）。结束后打印 `{"success": ...}`，程序退出，串流随之断开。再飞一次需重新执行第 4 步。
+**6. Start the run**: click the terminal where the command is running so that it has the input focus, then press **Enter**. The task lasts 20 s of simulation time and plays back in real time by default. If the physics and recording are slower than real time, playback slows down accordingly (measured at about 0.3× when streaming from uc1, about 70 s; see `playback` in the output). When the run ends, it prints `{"success": ...}`, the program exits, and the stream disconnects. To fly again, repeat step 4.
 
-换轨迹或增益只需换 `--config` 或加 `--set`，例如 `--config configs/helix_moderate.yaml`、`--set vehicle.motor_model_enabled=true`。无画面批量运行用 `--visualizer none`（不串流时不需要 `--wait-for-start`）。
+To change the trajectory or the gains, just change `--config` or add `--set`, for example `--config configs/helix_moderate.yaml` or `--set vehicle.motor_model_enabled=true`. For batch runs without display, use `--visualizer none` (`--wait-for-start` is not needed when not streaming).
 
-**7. 看结果、关机**
+**7. Check the results and power off**
 
 ```bash
-python -m isaac_drone summarize              # 最新一次运行的分阶段误差、倾角、电机转速、饱和比例
-python -m isaac_drone runs --last 5          # 最近 5 次运行的配置、视频、物理设置和结果
-ls runs/<运行目录名>/plots/                    # 飞完自动生成的英文图；重画：python -m isaac_drone plot
-ls runs/videos/                              # 录过视频的运行，每次一个拼屏 MP4，文件名即运行目录名
+python -m isaac_drone summarize              # per-phase error, tilt, motor speed, and saturation ratio of the latest run
+python -m isaac_drone runs --last 5          # config, video, physics settings, and results of the last 5 runs
+ls runs/<run directory name>/plots/          # English plots generated automatically after the flight; redraw: python -m isaac_drone plot
+ls runs/videos/                              # runs that recorded video, one tiled MP4 per run, named after the run directory
 ```
 
-拷回本地（在本地仓库根目录运行，增量同步全部运行记录到本地 `runs/`，`runs/videos/` 一并同步）：`rsync -az --info=progress2 uc1:isaac-drone-sim/runs/ runs/`。本地同样可以 `runs`、`summarize`、`plot`、`compare`。不用时在控制台关机。
+To copy the results back, run `rsync -az --info=progress2 uc1:isaac-drone-sim/runs/ runs/` in the root of the local repository. This command incrementally syncs all run records to the local `runs/`, including `runs/videos/`. `runs`, `summarize`, `plot`, and `compare` also work locally. Power off the instance in the console when the server is not in use.
 
-## 注意
+## Notes
 
-- 不要同时运行独立的 Isaac Sim 串流程序（`isaacsim.exp.full.streaming`），两者会抢 49100 端口；同一时间只能有一个进程占用它。
-- 停止程序用 `Ctrl+C`；`Ctrl+Z` 只是挂起，进程仍占着显存和端口。
-- 终端粘贴用 `Ctrl+Shift+V`。
-- WebRTC 同时只能连一个客户端；连不上时先关闭所有旧客户端窗口再连。
-- Isaac Lab 3.0 已去掉 `--headless`，无画面运行用 `--visualizer none`。
+- Do not run the standalone Isaac Sim streaming app (`isaacsim.exp.full.streaming`) at the same time, because both use port 49100 and only one process can hold this port at a time.
+- Use `Ctrl+C` to stop the program. `Ctrl+Z` only suspends the process, and it still holds GPU memory and the port.
+- Use `Ctrl+Shift+V` to paste in the terminal.
+- WebRTC accepts only one client at a time. If it does not connect, close all old client windows first and then connect again.
+- Isaac Lab 3.0 has removed `--headless`. Use `--visualizer none` to run without display.

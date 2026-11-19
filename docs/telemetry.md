@@ -1,201 +1,201 @@
-# 基础飞行数据记录
+# Basic Flight Data Records
 
-导师要求的 position、velocity、acceleration、motor speeds、force、torque、position error 均有对应记录。运行一次仿真后，在 `runs/<月日-时分>_<实验名>_<后端>[_video]/`（命名规则见 README「运行目录」）保存：
+position, velocity, acceleration, motor speeds, force, torque, and position error are all recorded. After each simulation run, the following files are saved automatically under `runs/<MMDD-HHMM>_<experiment>_<backend>[_video]/`:
 
-- `basic.csv`：每行一个已完成物理步，列名包含分量和单位，可用于 Excel、MATLAB、Python 绘图。
-- `telemetry.jsonl`：保留完整的步前/步后状态、控制输入、实际执行器状态和基础数据；另有每步的合成传感器读数 `sensors` 和状态估计 `estimation`（见「传感器读数与状态估计」）。
-- `telemetry_schema.json`：CSV 列与 JSON 字段的对应关系、单位、参考系、采样时间与来源说明。
-- `config.json` / `metadata.json`：实际配置（已展开 `extends` 与 `--set`）、后端描述、USD 层哈希（isaaclab）、机型属性、模型边界、任务阶段时间表 `mission_phases`、git commit 与命令行 `provenance`。
-- `metrics.json`：由 `telemetry.jsonl` 计算的整体和分阶段指标（`isaac_drone/analysis/metrics.py`），供 `summarize`、`compare`、`sweep` 共用。
-- `README.md`：运行卡片，由以上文件生成（`isaac_drone/analysis/catalog.py`）：命令行、代码版本、完整物理设置、视频、结果、分阶段指标和全部图像。`python -m isaac_drone runs` 用同样的信息列出所有运行。
+- `basic.csv`: each row is one completed physics step. The column names include the component and the unit, and the file can be plotted with Excel, MATLAB, or Python.
+- `telemetry.jsonl`: keeps the full pre-step/post-step states, control inputs, actual actuator states, and the basic data. It also records the synthesized sensor readings `sensors` and the state estimation `estimation` for each step (see "Sensor readings and state estimation").
+- `telemetry_schema.json`: the mapping between CSV columns and JSON fields, with units, reference frames, sampling times, and source descriptions.
+- `config.json` / `metadata.json`: the actual config (with `extends` and `--set` already expanded), backend description, USD layer hashes (isaaclab), vehicle properties, model limits, the mission phase schedule `mission_phases`, the git commit, and the command-line `provenance`.
+- `metrics.json`: overall and per-phase metrics computed from `telemetry.jsonl` (`isaac_drone/analysis/metrics.py`), shared by `summarize`, `compare`, and `sweep`.
+- `README.md`: the run card, generated from the files above (`isaac_drone/analysis/catalog.py`). It contains the command line, code version, full physics settings, videos, results, per-phase metrics, and all plots. `python -m isaac_drone runs` lists all runs using the same information.
 
-两个后端（`isaaclab`、`synthetic`）写出相同格式；合成后端没有 PhysX 求解器加速度，相应字段为空。
+Both backends (`isaaclab` and `synthetic`) write the same format. The synthetic backend has no PhysX solver acceleration, so the corresponding fields are empty.
 
-## 字段对应
+## Basic fields
 
-以下字段位于每条 JSON 记录的 `basic` 对象中。CSV 将向量按分量展开，具体列名以 `telemetry_schema.json` 为准。
+The fields below are in the `basic` object of each JSON record. The CSV expands vectors into components; see `telemetry_schema.json` for the exact column names.
 
-| 要求 | JSON 字段 | 单位与含义 |
+| Requirement | JSON field | Unit and meaning |
 |---|---|---|
-| Position | `position_w_m` | 世界系整机质心位置，m |
-| Velocity | `velocity_w_m_s` | 世界系整机质心速度，m/s |
-| Acceleration | `acceleration_w_m_s2` | 当前物理步的世界系平均运动加速度，m/s² |
-| Solver acceleration | `acceleration_native_w_m_s2` | 可用时记录 PhysX 各刚体质心加速度的质量加权值，m/s² |
-| Motor speeds | `motor_speed_rps` / `motor_speed_rpm` / `motor_speed_rad_s` | 四个旋翼转速幅值：rps、rpm、rad/s |
-| Force | `force_command_b_n` / `force_motor_b_n` / `force_submitted_b_n` / `force_net_w_n` | 分别为控制需求、电机产生、提交物理引擎、由运动推导的总合力，N |
-| Torque | `torque_command_b_nm` / `torque_motor_b_nm` / `torque_submitted_b_nm` / `torque_net_w_nm` | 对应上述不同阶段、关于整机质心的力矩，N·m |
-| Position error | `position_error_w_m` / `position_error_norm_m` | 三轴目标减实际位置误差，以及三维欧氏距离，m |
+| Position | `position_w_m` | Position of the vehicle center of mass in the world frame, m |
+| Velocity | `velocity_w_m_s` | Velocity of the vehicle center of mass in the world frame, m/s |
+| Acceleration | `acceleration_w_m_s2` | World-frame average motion acceleration over the current physics step, m/s² |
+| Solver acceleration | `acceleration_native_w_m_s2` | Mass-weighted value of the PhysX center-of-mass accelerations of the rigid bodies, recorded when available, m/s² |
+| Motor speeds | `motor_speed_rps` / `motor_speed_rpm` / `motor_speed_rad_s` | Speed magnitudes of the four rotors: rps, rpm, rad/s |
+| Force | `force_command_b_n` / `force_motor_b_n` / `force_submitted_b_n` / `force_net_w_n` | Control demand, force produced by the motors, force submitted to the physics engine, and total net force derived from motion, in N |
+| Torque | `torque_command_b_nm` / `torque_motor_b_nm` / `torque_submitted_b_nm` / `torque_net_w_nm` | Torque about the vehicle center of mass at the same stages as above, in N·m |
+| Position error | `position_error_w_m` / `position_error_norm_m` | Three-axis position error, target minus actual, and the three-dimensional Euclidean distance, m |
 
-同时保存目标位置/速度/加速度、四元数、角速度/角加速度、分配后的力/力矩、扰动力/力矩，以及每桨命令推力和实际推力。
+The target position/velocity/acceleration, quaternion, angular velocity/angular acceleration, allocated force/torque, disturbance force/torque, and the commanded and actual thrust of each rotor are saved as well.
 
-## 理想值、实际值与误差
+## Ideal value, actual value, and error
 
-每个被跟踪的量都同时记录理想值、实际值和误差。误差一律为**理想值 − 实际值**，与对应的一对量同一参考系、同一单位；模长列给出三维大小。
+Every tracked quantity is recorded as an ideal value, an actual value, and an error. The error is always **ideal value − actual value**, in the same reference frame and unit as the pair it belongs to. The norm columns give the three-dimensional size of the error.
 
-| 量 | 理想值 | 实际值 | 误差 |
+| Quantity | Ideal value | Actual value | Error |
 |---|---|---|---|
-| 位置 | `target_position_w_m`（轨迹目标） | `position_w_m` | `position_error_w_m`、`position_error_norm_m` |
-| 速度 | `target_velocity_w_m_s` | `velocity_w_m_s` | `velocity_error_w_m_s`、`velocity_error_norm_m_s` |
-| 加速度 | `target_acceleration_w_m_s2` | `acceleration_w_m_s2`（速度差分） | `acceleration_error_w_m_s2`、`acceleration_error_norm_m_s2` |
-| 姿态 | `target_quaternion_wxyz`、`target_attitude_rpy_rad`（控制器期望姿态 R_d） | `quaternion_wxyz`、`attitude_rpy_rad` | `attitude_error_rpy_rad`（逐角差，回绕到 ±π）、`attitude_error_angle_rad`（实际转到期望的单次旋转角） |
-| 角速度 | `target_angular_velocity_b_rad_s`（控制器期望角速度，转到实际机体系） | `angular_velocity_b_rad_s` | `angular_velocity_error_b_rad_s`、`angular_velocity_error_norm_rad_s` |
-| 电机转速 | `motor_speed_command_rps` / `_rpm`（送给电机模型的命令） | `motor_speed_rps` / `_rpm` | `motor_speed_error_rps` / `_rpm` |
-| 单桨推力 | `motor_thrust_command_n` | `motor_thrust_applied_n` | `motor_thrust_error_n` |
-| 力 | `force_command_b_n`（控制需求） | `force_motor_b_n`（电机输出） | `force_error_b_n`、`force_error_norm_n` |
-| 力矩 | `torque_command_b_nm` | `torque_motor_b_nm` | `torque_error_b_nm`、`torque_error_norm_nm` |
+| Position | `target_position_w_m` (trajectory target) | `position_w_m` | `position_error_w_m`, `position_error_norm_m` |
+| Velocity | `target_velocity_w_m_s` | `velocity_w_m_s` | `velocity_error_w_m_s`, `velocity_error_norm_m_s` |
+| Acceleration | `target_acceleration_w_m_s2` | `acceleration_w_m_s2` (velocity difference) | `acceleration_error_w_m_s2`, `acceleration_error_norm_m_s2` |
+| Attitude | `target_quaternion_wxyz`, `target_attitude_rpy_rad` (desired attitude R_d from the controller) | `quaternion_wxyz`, `attitude_rpy_rad` | `attitude_error_rpy_rad` (per-angle difference, wrapped to ±π), `attitude_error_angle_rad` (single rotation angle from actual to desired) |
+| Angular velocity | `target_angular_velocity_b_rad_s` (desired angular velocity from the controller, rotated into the actual body frame) | `angular_velocity_b_rad_s` | `angular_velocity_error_b_rad_s`, `angular_velocity_error_norm_rad_s` |
+| Motor speed | `motor_speed_command_rps` / `_rpm` (command sent to the motor model) | `motor_speed_rps` / `_rpm` | `motor_speed_error_rps` / `_rpm` |
+| Rotor thrust | `motor_thrust_command_n` | `motor_thrust_applied_n` | `motor_thrust_error_n` |
+| Force | `force_command_b_n` (control demand) | `force_motor_b_n` (motor output) | `force_error_b_n`, `force_error_norm_n` |
+| Torque | `torque_command_b_nm` | `torque_motor_b_nm` | `torque_error_b_nm`, `torque_error_norm_nm` |
 
-说明：
+Notes:
 
-- 姿态用 Z-Y-X 欧拉角（滚转、俯仰、偏航）方便阅读，四元数仍是无歧义的原始记录。逐角误差不是旋转向量；判断姿态误差大小请看 `attitude_error_angle_rad`。
-- 力/力矩误差 = 控制需求 − 电机输出，包含分配饱和与电机响应滞后两部分；分配后的中间值仍在 `force_allocated_b_n` / `torque_allocated_b_nm`。
-- 运动推导的净力 `force_net_w_n` 是结果量，其理想值即质量 × 目标加速度，误差等于质量 × 加速度误差，因此不重复记录。
-- 目标在控制周期内保持不变（默认物理 200 Hz、控制 100 Hz），实际值每个物理步都在变化，所以误差在相邻两步之间会有小幅锯齿，这是保持目标的真实结果，不是记录错误。
-- 没有理想值来源时（例如旧版日志或自定义后端），相应理想值和误差列留空，不填 0。
+- Attitude is written as Z-Y-X Euler angles (roll, pitch, yaw) so that it is easy to read, and the quaternion is still the unambiguous original record. The per-angle error is not a rotation vector; to judge the size of the attitude error, use `attitude_error_angle_rad`.
+- Force/torque error = control demand − motor output. It includes both allocation saturation and motor response lag. The intermediate values after allocation are still recorded in `force_allocated_b_n` / `torque_allocated_b_nm`.
+- The net force derived from motion, `force_net_w_n`, is a result. Its ideal value is mass × target acceleration, and its error equals mass × acceleration error, so it is not recorded a second time.
+- The target stays the same within a control period (by default physics runs at 200 Hz and control at 100 Hz), while the actual value changes at every physics step. So the error shows a small sawtooth between neighboring steps. This comes from holding the target and is not a recording error.
+- When there is no source for the ideal value (for example, old logs or a custom backend), the corresponding ideal-value and error columns are left empty instead of being filled with 0.
 
-## 风与扰动
+## Wind and disturbances
 
-这些列排在原有列之后（原有列的位置不变）；对应模型没开时整列留空。采样时刻都是物理步开始时、作用于本步的值。
+These columns come after the existing columns, and the positions of the existing columns do not change. When the corresponding model is not enabled, the whole column is left empty. Each column is sampled at the start of the physics step and is the value that acts during that step.
 
-| 字段 | 含义 |
+| Field | Meaning |
 |---|---|
-| `wind_w_m_s` / `wind_mean_w_m_s` / `wind_turbulence_w_m_s` / `wind_speed_m_s` | 质心处的世界系风速，以及其中确定性部分（均值 + 梯度 + 阵风）、OU 湍流部分和风速大小；风场时间窗外为 0 |
-| `rotor_axial_wind_m_s` | 每个桨处沿桨轴的风速分量（上升气流为正） |
-| `rotor_speed_offset_rps` / `_rpm` | 风换算成的每桨等效转速偏移，加在电机模型之后 |
-| `rotor_speed_effective_rps` / `_rpm` | 电机转速 + 偏移，即有风时实际推力对应的等效转速；不是电机状态 |
-| `force_wind_drag_b_n` | 桨盘平面内的风阻力（机体系，作用在质心），已计入 `force_disturbance_b_n` |
-| `force_ou_w_n` / `force_ou_mean_w_n` | 旧的质心 OU 随机力（世界系）实际施加值及其均值；时间窗外为 0，已计入扰动合力 |
-| `torque_ou_b_nm` / `torque_ou_mean_b_nm` | OU 随机力矩（机体系）实际施加值及其均值 |
+| `wind_w_m_s` / `wind_mean_w_m_s` / `wind_turbulence_w_m_s` / `wind_speed_m_s` | World-frame wind velocity at the center of mass, its deterministic part (mean + gradient + gusts), its OU turbulence part, and the wind speed; 0 outside the wind field time window |
+| `rotor_axial_wind_m_s` | Wind velocity component along the rotor axis at each rotor (updraft is positive) |
+| `rotor_speed_offset_rps` / `_rpm` | Equivalent rotor speed offset of each rotor converted from the wind, added after the motor model |
+| `rotor_speed_effective_rps` / `_rpm` | Motor speed + offset, which is the equivalent rotor speed for the actual thrust when there is wind; it is not the motor state |
+| `force_wind_drag_b_n` | Wind drag in the rotor disk plane (body frame, applied at the center of mass), already included in `force_disturbance_b_n` |
+| `force_ou_w_n` / `force_ou_mean_w_n` | Actually applied value and mean of the old OU random force at the center of mass (world frame); 0 outside the time window, already included in the total disturbance force |
+| `torque_ou_b_nm` / `torque_ou_mean_b_nm` | Actually applied value and mean of the OU random torque (body frame) |
 
-有风作用到旋翼时，`motor_thrust_applied_n` 是实际加在桨叶上的推力 kf·(RPS + 偏移)²，所以 `motor_thrust_error_n`、`force_error_b_n`、`torque_error_b_nm` 里也包含风对旋翼的影响；`motor_speed_rps` 仍是电机状态本身。
+When wind acts on the rotors, `motor_thrust_applied_n` is the thrust actually applied to the blades, kf·(RPS + offset)², so `motor_thrust_error_n`, `force_error_b_n`, and `torque_error_b_nm` also include the effect of wind on the rotors; `motor_speed_rps` is still the motor state itself.
 
-## 传感器读数与状态估计（JSONL）
+## Sensor readings and state estimation (JSONL)
 
-每条步记录多两个顶层字段，只在 `telemetry.jsonl` 里，不进 `basic.csv`（基础 CSV 仍是导师要求的运动与动力数据）。配置见 docs/configuration.md「传感器与状态估计」，模型与公式见 docs/architecture.md 第 5 节。
+Each step record has two more top-level fields. They are written only to `telemetry.jsonl` and not to `basic.csv` (the basic CSV still keeps only the motion and dynamics data). For the configuration, see the "Sensors and state estimation" section of docs/configuration.md; for the models and formulas, see Section 5 of docs/architecture.md.
 
 ### `sensors`
 
-`sensors.enabled: false` 时为 `null`；否则是四个键 `imu`、`magnetometer`、`barometer`、`gps`，每个键在本步没有读数发布时为 `null`。读数由本步步首/步末的仿真真值合成，在步末生成，并在下一步控制器读状态之前交给状态提供者（`update`），所以估计器永远只看到过去的数据。
+When `sensors.enabled: false`, this field is `null`. Otherwise it contains four keys, `imu`, `magnetometer`, `barometer`, and `gps`, and each key is `null` when no reading is published in this step. The readings are synthesized from the simulation ground truth at the start/end of this step. They are generated at the end of the step and passed to the state provider (`update`) before the controller reads the state in the next step, so the estimator only ever sees past data.
 
-| 传感器 | 读数字段 | 同时记录的真值 |
+| Sensor | Reading fields | Ground truth recorded with it |
 |---|---|---|
-| `imu`（默认 200 Hz） | `accelerometer_m_s2`（传感器系比力，静止时约 (0, 0, +9.81)）、`gyroscope_rad_s`（步末机体角速度） | `true_specific_force_s_m_s2`、`true_angular_velocity_s_rad_s` |
-| `magnetometer`（50 Hz） | `magnetic_field_ut`（传感器系，µT） | `true_magnetic_field_s_ut`（地磁 + 电机干扰）、`motor_interference_s_ut` |
-| `barometer`（50 Hz） | `altitude_m`（安装点世界 z） | `true_altitude_m` |
-| `gps`（10 Hz，延迟 0.12 s） | `position_w_m`、`velocity_w_m_s`（天线的本地 ENU 位置/速度，不是经纬度） | `true_position_w_m`、`true_velocity_w_m_s` |
+| `imu` (200 Hz by default) | `accelerometer_m_s2` (specific force in the sensor frame, about (0, 0, +9.81) at rest), `gyroscope_rad_s` (body angular velocity at the end of the step) | `true_specific_force_s_m_s2`, `true_angular_velocity_s_rad_s` |
+| `magnetometer` (50 Hz) | `magnetic_field_ut` (sensor frame, µT) | `true_magnetic_field_s_ut` (geomagnetic field + motor interference), `motor_interference_s_ut` |
+| `barometer` (50 Hz) | `altitude_m` (world z of the mounting point) | `true_altitude_m` |
+| `gps` (10 Hz, 0.12 s delay) | `position_w_m`, `velocity_w_m_s` (local ENU position/velocity of the antenna, not latitude and longitude) | `true_position_w_m`, `true_velocity_w_m_s` |
 
-每个读数带自己的 `time_s`：它描述的时刻，即采样那一步的步末。有延迟的传感器（默认只有 GPS）在采样后 `delay_s/dt` 步才出现在记录里，这时读数的 `time_s` 比记录的 `post_step_state.time_s` 早一个延迟，画图和估计器都应使用读数自己的 `time_s`。`true_*` 是无噪声的理想值，用来画「读数 vs 真值」图和算传感器误差，估计器不应读取它们。
+Each reading has its own `time_s`, which is the time the reading describes, that is, the end of the step in which it was sampled. A sensor with delay (only GPS by default) appears in the record `delay_s/dt` steps after sampling. At that point the reading's `time_s` is one delay earlier than the record's `post_step_state.time_s`, so plots and estimators should both use the reading's own `time_s`. The `true_*` fields are noise-free ideal values used to draw the "reading vs ground truth" plots and to compute the sensor error; the estimator should not read them.
 
 ### `estimation`
 
-`estimation.mode: truth` 且没有注入状态提供者时为 `null`。否则：
+When `estimation.mode: truth` and no state provider is injected, this field is `null`. Otherwise it contains the following fields:
 
-| 字段 | 含义 |
+| Field | Meaning |
 |---|---|
-| `kind` / `mode` / `used_by_controller` | 估计器类型（目前只有 `passthrough`），模式（`shadow`、`closed_loop`，注入的提供者为 `injected`），控制器是否使用了这个状态 |
-| `state` | 步末估计状态（`time_s`、`position_w`、`quaternion_wxyz`、`linear_velocity_w`、`angular_velocity_b`），与 `post_step_state` 同一时刻 |
-| `error` | **估计误差 = 真值 − 估计值**：`position_w_m`、`velocity_w_m_s`、`angular_velocity_b_rad_s` 及各自模长；姿态误差拆成旋转向量 `attitude_error_rad`（Log(R_估计ᵀ R_真值)）、其角度 `attitude_error_angle_rad`、倾角误差 `tilt_error_rad`（两个机体 Z 轴夹角）和偏航误差 `yaw_error_rad` |
-| `control_error` | **控制误差 = 参考值 − 估计值**：`position_w_m`、`velocity_w_m_s` 及模长，参考值是本步持有的目标 |
-| `covariance_diag` / `nis` | 估计器给出的协方差对角线和 NIS；`passthrough` 为 `null` |
+| `kind` / `mode` / `used_by_controller` | Estimator type (only `passthrough` for now), mode (`shadow`, `closed_loop`, or `injected` for an injected provider), and whether the controller used this state |
+| `state` | Estimated state at the end of the step (`time_s`, `position_w`, `quaternion_wxyz`, `linear_velocity_w`, `angular_velocity_b`), at the same time as `post_step_state` |
+| `error` | **Estimation error = ground truth − estimate**: `position_w_m`, `velocity_w_m_s`, `angular_velocity_b_rad_s` and their norms; the attitude error is split into the rotation vector `attitude_error_rad` (Log(R_estᵀ R_true)), its angle `attitude_error_angle_rad`, the tilt error `tilt_error_rad` (the angle between the two body Z axes), and the yaw error `yaw_error_rad` |
+| `control_error` | **Control error = reference − estimate**: `position_w_m`, `velocity_w_m_s` and their norms; the reference is the target held in this step |
+| `covariance_diag` / `nis` | Covariance diagonal and NIS given by the estimator; `null` for `passthrough` |
 
-三种误差的关系：`basic.position_error_w_m` 是**总误差 = 参考值 − 真值**，所以
+The three errors are related as follows: `basic.position_error_w_m` is the **total error = reference − ground truth**, so
 
 $$
-\text{总误差} = \text{控制误差} - \text{估计误差}
+\text{total error} = \text{control error} - \text{estimation error}
 $$
 
-`metrics.json` 按阶段给出 `estimation_position_error_rms_m` / `_max_m`、`estimation_velocity_error_rms_m_s`、`estimation_tilt_error_rms_deg`、`estimation_yaw_error_rms_deg`、`estimation_angular_velocity_error_rms_rad_s` 和 `control_position_error_rms_m`；没有估计记录时为 `null`。`summarize` 在表格后加一行估计误差汇总，运行卡片的指标表只在有估计记录时多出这几行。顶层 `state_source` 说明控制器用的状态：`simulation_truth`、`estimate:<kind>` 或 `injected_state_provider`。
+`metrics.json` gives, for each phase, `estimation_position_error_rms_m` / `_max_m`, `estimation_velocity_error_rms_m_s`, `estimation_tilt_error_rms_deg`, `estimation_yaw_error_rms_deg`, `estimation_angular_velocity_error_rms_rad_s`, and `control_position_error_rms_m`; they are `null` when there is no estimation record. `summarize` adds one summary line for the estimation error after the table, and the metrics table of the run card has these extra rows only when there is an estimation record. The top-level `state_source` says which state the controller used: `simulation_truth`, `estimate:<kind>`, or `injected_state_provider`.
 
-## 图像
+## Plots
 
-每次飞行结束后自动在 `runs/<运行目录>/plots/` 生成英文 PNG；CSV/JSONL 仍是原始数据，图像只是派生视图。标题第二行是运行目录名，第三行是物理设置（只列与理想对象不同的项，如 `OU force (1,0,0)±0.5 N τ 1 s; mass ×1.2`），图片单独拿出来也能看出是哪次运行。也可以对任意一次运行（包括拷回本地的目录）重新生成，只需 NumPy 和 matplotlib：
+After each flight, English PNG plots are generated automatically under `runs/<run directory>/plots/`. The CSV/JSONL files are still the raw data, and the plots are only views derived from them. The second line of the title is the run directory name, and the third line is the physics settings (only the items that differ from the ideal plant are listed, such as `OU force (1,0,0)±0.5 N τ 1 s; mass ×1.2`), so a plot taken out on its own still shows which run it belongs to. The following commands can also regenerate the plots for any run (including a directory copied back to the local machine); they only need NumPy and matplotlib:
 
 ```bash
-python -m isaac_drone plot                  # 最新一次运行
-python -m isaac_drone plot runs/<运行目录>   # 指定运行
+python -m isaac_drone plot                  # the latest run
+python -m isaac_drone plot runs/<run directory>   # a specific run
 ```
 
-| 文件 | 内容 |
+| File | Content |
 |---|---|
-| `trajectory_3d.png` | 质心三维轨迹与俯视图，实际 vs 目标 |
-| `position.png` / `velocity.png` / `acceleration.png` | 三轴实际 vs 目标，末行为误差和误差模长（图例给出最大值和 RMS）；加速度另画 PhysX 求解器值 |
-| `attitude.png` / `angular_velocity.png` | 滚转/俯仰/偏航（deg）与机体角速度（deg/s），实际 vs 期望，末行为误差 |
-| `motor_speed.png` / `rotor_thrust.png` | 四个电机转速（rpm）与单桨推力，实际 vs 命令，末行为误差；有风作用到旋翼时转速图另画等效转速 |
-| `force.png` / `torque.png` | 机体系力/力矩，电机输出 vs 控制需求，末行为误差 |
-| `wind.png` | 质心处世界系风速三轴：实际风速 vs 均值 + 阵风，末行为 OU 湍流部分及其模长（最大值、RMS）。仅开了风场的运行才画 |
-| `rotor_wind.png` | 每桨等效转速 vs 电机转速，末行为风造成的转速偏移。仅开了 `rotor_wind.axial` 的运行才画 |
-| `wind_drag.png` | 桨盘平面内的风阻力（机体系）。仅开了 `rotor_wind.inplane_drag` 的运行才画 |
-| `ou_force.png` / `ou_torque.png` | 旧的质心 OU 随机力（世界系）/ 力矩（机体系）：实际施加值 vs 均值，末行为 OU 随机部分。仅开了 `ou_wrench` 且该项不全为 0 的运行才画 |
-| `sensors_accelerometer.png` / `sensors_gyroscope.png` | IMU 读数 vs 真实比力 / 真实角速度（传感器系），末行为真值 − 读数。横轴是读数自己的时刻；仅开了传感器的运行才画 |
-| `sensors_magnetometer.png` / `sensors_barometer.png` | 磁力计读数 vs 真实磁场（地磁 + 电机干扰）；气压高度 vs 安装点真实高度 |
-| `sensors_gps_position.png` / `sensors_gps_velocity.png` | GPS 天线位置/速度读数 vs 真值（本地 ENU），按读数时刻对齐，延迟不体现在横轴上 |
-| `estimation_position.png` / `estimation_velocity.png` / `estimation_attitude.png` / `estimation_angular_velocity.png` | 估计值 vs 真值，末行为估计误差（真值 − 估计值）；姿态图的误差模长是旋转角。仅 `shadow` / `closed_loop`（或注入了状态提供者）的运行才画 |
+| `trajectory_3d.png` | Three-dimensional trajectory of the center of mass and top view, actual vs target |
+| `position.png` / `velocity.png` / `acceleration.png` | Three axes, actual vs target; the last row shows the error and the error norm (the legend gives the maximum and RMS); the acceleration plot also shows the PhysX solver value |
+| `attitude.png` / `angular_velocity.png` | Roll/pitch/yaw (deg) and body angular velocity (deg/s), actual vs desired; the last row shows the error |
+| `motor_speed.png` / `rotor_thrust.png` | Speeds of the four motors (rpm) and thrust of each rotor, actual vs commanded; the last row shows the error; when wind acts on the rotors, the speed plot also shows the equivalent rotor speed |
+| `force.png` / `torque.png` | Body-frame force/torque, motor output vs control demand; the last row shows the error |
+| `wind.png` | Three axes of the world-frame wind velocity at the center of mass: actual wind velocity vs mean + gusts; the last row shows the OU turbulence part and its norm (maximum, RMS). Drawn only for runs with the wind field enabled |
+| `rotor_wind.png` | Equivalent rotor speed of each rotor vs motor speed; the last row shows the rotor speed offset caused by wind. Drawn only for runs with `rotor_wind.axial` enabled |
+| `wind_drag.png` | Wind drag in the rotor disk plane (body frame). Drawn only for runs with `rotor_wind.inplane_drag` enabled |
+| `ou_force.png` / `ou_torque.png` | The old OU random force at the center of mass (world frame) / torque (body frame): actually applied value vs mean; the last row shows the OU random part. Drawn only for runs with `ou_wrench` enabled and this term not all 0 |
+| `sensors_accelerometer.png` / `sensors_gyroscope.png` | IMU readings vs true specific force / true angular velocity (sensor frame); the last row shows ground truth − reading. The horizontal axis is the reading's own time; drawn only for runs with sensors enabled |
+| `sensors_magnetometer.png` / `sensors_barometer.png` | Magnetometer reading vs true magnetic field (geomagnetic field + motor interference); barometric altitude vs true altitude of the mounting point |
+| `sensors_gps_position.png` / `sensors_gps_velocity.png` | GPS antenna position/velocity readings vs ground truth (local ENU), aligned by reading time, so the delay does not show on the horizontal axis |
+| `estimation_position.png` / `estimation_velocity.png` / `estimation_attitude.png` / `estimation_angular_velocity.png` | Estimate vs ground truth; the last row shows the estimation error (ground truth − estimate); in the attitude plot the error norm is the rotation angle. Drawn only for `shadow` / `closed_loop` runs (or runs with an injected state provider) |
 
-竖虚线为任务阶段分界（取自 `metadata.json` 的 `mission_phases`，例如 spin_up / takeoff / helix / hold；旧版运行目录按原先的 delay / takeoff / helix / hold 边界）。旧版日志缺少的误差列会在画图时用"理想 − 实际"补算，缺少理想值的量只画实际值。
+The vertical dashed lines in the plots are the boundaries between mission phases (taken from `mission_phases` in `metadata.json`, for example spin_up / takeoff / helix / hold; old run directories use the earlier delay / takeoff / helix / hold boundaries). Error columns missing from old logs are computed as "ideal − actual" when plotting, and for quantities without an ideal value only the actual value is drawn.
 
-## 时间对齐
+## Time alignment
 
-每条 `basic` 记录有四个时间字段：
+Each `basic` record has four time fields:
 
-- `step_start_time_s`：本物理步开始时刻。
-- `sample_time_s`：本物理步结束时刻；实际位置、姿态、速度取这个时刻。
-- `interval_dt_s`：两者之差，即实际使用的物理步长。
-- `reference_sample_time_s`：本步使用的目标最近一次由控制循环采样的时刻。
+- `step_start_time_s`: the start time of this physics step.
+- `sample_time_s`: the end time of this physics step; the actual position, attitude, and velocity are taken at this time.
+- `interval_dt_s`: the difference between the two, which is the physics step length actually used.
+- `reference_sample_time_s`: the time at which the target used in this step was last sampled by the control loop.
 
-控制可以比物理仿真慢。例如默认物理 200 Hz、控制 100 Hz，第二个物理步继续使用第一个物理步采样的控制目标。记录的误差定义为：
+The control rate can be lower than the physics simulation rate. For example, with the default 200 Hz physics and 100 Hz control, the second physics step keeps using the control target sampled in the first physics step. The recorded error is defined as:
 
 ```text
-position_error_w_m = 本物理步持有的目标位置 - 物理步结束后的实际质心位置
+position_error_w_m = target position held in this physics step - actual center-of-mass position after the physics step ends
 position_error_norm_m = sqrt(error_x² + error_y² + error_z²)
 ```
 
-这反映实际使用的目标，不额外调用轨迹生成器来生成一个从未交给控制器的未来目标。未来螺旋任务如果还需要“连续解析轨迹在当前时刻的误差”，应单独增加该参考量，不能混淆两种定义。
+An error defined this way reflects the target that was actually used. The trajectory generator is not called again to produce a future target that was never passed to the controller. If a future helix task also needs "the error of the continuous analytic trajectory at the current time", that reference should be added as a separate quantity so that the two definitions stay apart.
 
-为兼容原日志，JSON 顶层 `time_s` 仍表示步首，`state` 仍是控制所用的步首状态，`post_step_state` 是步末仿真真值。绘制 `basic` 数据请使用它自己的 `sample_time_s`。
+To stay compatible with the original logs, the top-level JSON `time_s` still means the start of the step, `state` is still the start-of-step state used for control, and `post_step_state` is the simulation ground truth at the end of the step. When plotting `basic` data, use its own `sample_time_s`.
 
-## 加速度来源
+## Where the acceleration comes from
 
-主记录加速度每个物理步都计算：
+The acceleration in the main record is computed at every physics step with the formula below:
 
 ```text
 acceleration_w = (velocity_w_end - velocity_w_start) / interval_dt
 ```
 
-计算使用本步两端的实际仿真质心速度，不使用目标加速度、估计器输出或上一次写入文件的速度。因此即使改变日志降采样频率，加速度也不会误用错误时间间隔。复位后的第一条记录使用复位状态和第一次物理步结束状态，不补一个虚构零值。
+The calculation uses the actual simulated center-of-mass velocity at both ends of this step. It does not use the target acceleration, the estimator output, or the velocity last written to the file. So even if the log downsampling rate changes, the acceleration still uses the correct time interval. The first record after a reset uses the reset state and the state at the end of the first physics step, so no extra zero has to be added.
 
-这是**区间平均运动加速度**，包含重力在运动中造成的影响，不是 IMU 比力。加速度计读数由传感器层另行合成（`sensors.imu`）：比力 `f_b = R_pairᵀ(Δv/Δt − g_w)` 加杆臂项，再过误差模型，见「传感器读数与状态估计」和 docs/architecture.md 第 5 节。
+This is the **interval-averaged motion acceleration**. It includes the effect of gravity on the motion and is not the IMU specific force. The accelerometer reading is synthesized separately by the sensor layer (`sensors.imu`): the specific force `f_b = R_pairᵀ(Δv/Δt − g_w)` plus the lever arm terms, passed through the error model; see "Sensor readings and state estimation" and Section 5 of docs/architecture.md.
 
-`acceleration_native_w_m_s2` 独立记录 PhysX 提供的加速度，使用各刚体质量加权到整机质心；只有求解器数据可用且已经完成相应物理步时才记录。未初始化/不可用为 null，CSV 中为空，不把它当作零。`acceleration_native_source` 标明来源。两种加速度的采样/数值定义不同，不能保证逐点完全相等。
+`acceleration_native_w_m_s2` separately records the acceleration provided by PhysX, mass-weighted over the rigid bodies to the vehicle center of mass. It is recorded only when the solver data is available and the corresponding physics step has finished. When it is uninitialized or unavailable, it is recorded as null and is empty in the CSV; it is not recorded as zero. `acceleration_native_source` gives the source. The two accelerations are sampled and numerically defined in different ways, so they may not be exactly equal at every point.
 
-世界系角加速度由世界系角速度差分计算；若输出为机体系，则将该世界系平均量转到步末机体系。不能直接拿两个不同姿态下的机体系分量相减当作同一世界方向的变化。
+The world-frame angular acceleration is computed by differencing the world-frame angular velocity; if the output is in the body frame, this world-frame average is rotated into the body frame at the end of the step. The body frame has a different attitude at the two times, so body-frame components cannot be subtracted directly.
 
-## 电机转速来源
+## Where the motor speed comes from
 
-本机型 USD 中旋翼通过固定关节连接，没有可直接读取的真实旋转关节编码器。原生推进器内部使用：
+In the USD of this vehicle the rotors are attached with fixed joints, so there is no real rotary joint encoder that can be read directly. The native thruster uses internally:
 
 ```text
 thrust_state = sampled_kf × rps²
 ```
 
-日志直接读取积分后的 RPS 电机状态，再换算 rpm、rad/s。实际推力由每个电机**自己的当次采样系数**乘以实际 RPS² 得到；目标转速与实际转速分开记录。
+The log reads the integrated RPS motor state directly and then converts it to rpm and rad/s. The actual thrust is each motor's **own coefficient from the current sampling** multiplied by the actual RPS²; the target rotor speed and the actual rotor speed are recorded separately.
 
-旋翼顺序固定为后左 BL、后右 BR、前左 FL、前右 FR。记录值为非负幅值；配置里的反扭矩正负号不被当作已测量的机械转速方向。
+The rotor order is fixed as back-left BL, back-right BR, front-left FL, front-right FR. The recorded values are non-negative magnitudes; the sign of the reaction torque in the config does not represent a measured mechanical rotation direction.
 
-`motor_speed_source` 明确说明这是使用原生积分公式演化的转速状态，不是实机编码器数据。`motor_thrust_command_n` 和 `motor_thrust_applied_n` 分开保留，便于观察电机响应滞后和饱和。电机模型关闭时（默认，`backend.motor_model_enabled: false`），每个物理步转速直接设为受限后的指令，`motor_speed_source` 为 `direct_rps_state_set_to_limited_command_each_step_motor_model_off`，实际与命令只差运行上下限的截断。
+`motor_speed_source` says that this rotor speed is a state computed with the native integration formula, not data from a real encoder. `motor_thrust_command_n` and `motor_thrust_applied_n` are kept separately so that motor response lag and saturation are easy to see. When the motor model is off (the default, `backend.motor_model_enabled: false`), the rotor speed is set directly to the limited command at every physics step, `motor_speed_source` is `direct_rps_state_set_to_limited_command_each_step_motor_model_off`, and the actual value differs from the command only by the clipping at the operating limits.
 
-## 力和力矩要区分阶段
+## Stages of force and torque
 
-| 字段前缀 | 表示什么 |
+| Field prefix | What it means |
 |---|---|
-| `force_command` / `torque_command` | 控制器希望实现的整机力/力矩 |
-| `force_allocated` / `torque_allocated` | 考虑四桨推力约束后分配出的目标 |
-| `force_motor` / `torque_motor` | 原生电机动态更新后实际输出推力对应的整机力/力矩 |
-| `force_disturbance` / `torque_disturbance` | 显式扰动和气动模型产生的附加力/力矩 |
-| `force_submitted` / `torque_submitted` | 逐旋翼提交量与显式附加作用关于整机质心的合计，仅为诊断合计，不作为整机控制量提交 |
-| `force_net` / `torque_net` | 从本物理步实际运动推导的区间平均总合力/合力矩 |
+| `force_command` / `torque_command` | The vehicle force/torque the controller wants |
+| `force_allocated` / `torque_allocated` | The target after allocation with the thrust limits of the four rotors taken into account |
+| `force_motor` / `torque_motor` | The vehicle force/torque from the thrust actually output after the native motor dynamics update |
+| `force_disturbance` / `torque_disturbance` | Additional force/torque produced by the explicit disturbance and aerodynamic models |
+| `force_submitted` / `torque_submitted` | Sum, about the vehicle center of mass, of the per-rotor submitted values and the explicit additional effects; it is only a diagnostic total and is not submitted as a vehicle-level control quantity |
+| `force_net` / `torque_net` | Interval-averaged total net force/torque derived from the actual motion in this physics step |
 
-提交值**不包含** PhysX 自行计算的重力、碰撞接触和原生阻尼，所以不把它叫作所有物理作用的总和。力/力矩命令和提交值在物理步开始时的机体系中表达；运动推导的净值在世界系表达。
+The submitted values **do not include** the gravity, collision contact, and native damping that PhysX computes on its own, so they are not the sum of all physical effects. The force/torque commands and submitted values are expressed in the body frame at the start of the physics step; the net values derived from motion are expressed in the world frame.
 
-对当前固定连接的刚体总成，净作用使用：
+For the current rigid-body assembly with fixed joints, the net effect is computed with the formulas below:
 
 ```text
 force_net_world = mass × Δ(velocity_world) / Δt
@@ -203,18 +203,18 @@ angular_momentum_world = R_body_to_world × inertia_com_body × angular_velocity
 torque_net_world = Δ(angular_momentum_world) / Δt
 ```
 
-角动量使用完整惯量张量和两个端点的实际姿态，保留转动耦合。这些是由运动反推的量，不是独立力传感器测量；也不能作为独立证据验证同一运动数据是否正确。
+The angular momentum uses the full inertia tensor and the actual attitude at both end points, so the rotational coupling is kept. These quantities are derived back from the motion and are not measurements from an independent force sensor, so they cannot serve as independent evidence for checking whether the same motion data is correct.
 
-## 记录频率与验证范围
+## Recording rate and what has been verified
 
-当前 `logging.every_n_steps: 1`，默认每个物理步记录一次，配合 `simulation.dt: 0.005` 为每秒仿真时间 200 条。若以后增大该间隔，只降低写入频率，计算仍在每个物理步进行，不会变成跨多个日志行的差分。JSON 的结束/异常事件不会混进 CSV 数据行。
+Currently `logging.every_n_steps: 1`, so by default one record is written per physics step. With `simulation.dt: 0.005`, this is 200 records per second of simulation time. If this interval is increased later, only the write rate goes down; the calculation still runs at every physics step and does not turn into a difference across several log rows. JSON end/exception events are not mixed into the CSV data rows.
 
-缺失读数写 null/空单元格；非有限数、错误向量长度会报错，不悄悄填零。字段来源、单位和时间说明同时写入机器可读 schema，便于将数据交给导师或后续分析程序。
+A missing reading is written as null or an empty cell. A non-finite number or a wrong vector length raises an error and is not filled with zero. The field sources, units, and time descriptions are also written to a machine-readable schema, so that the data is easy to pass to later analysis programs.
 
-当前验证覆盖数值计算、转速状态与单位换算、时间配对、复位、坐标系、JSON/CSV 输出契约；开发机器没有完整 Isaac Sim 运行栈，仍需在服务器实际运行后验证真实日志和飞行表现。
+The current verification covers the numerical calculations, the rotor speed state and unit conversion, time pairing, reset, coordinate frames, and the JSON/CSV output format. The development machine does not have the full Isaac Sim stack, so real logs and flight behavior still need to be verified by actually running on the server.
 
-## 任务与控制器 JSONL 诊断
+## Diagnostics for the mission and controller
 
-`motor_command_rps` 是当步四电机命令（经过起转包络及运行上下限），`backend.commanded_motor_speed_rps` 为执行器接受的目标，`basic.motor_speed_rps` 为动态响应后的实际转速（电机模型关闭时与接受的目标相同）。`startup_fraction` 是 0..1 的起转包络，`motor_command_thrust_n` 对应接受转速的静态推力目标；`allocated_thrust_n` 则保留启动缩放前的闭环分配结果。
+`motor_command_rps` is the command to the four motors in the current step (after the spin-up envelope and the operating limits), `backend.commanded_motor_speed_rps` is the target accepted by the actuator, and `basic.motor_speed_rps` is the actual rotor speed after the dynamic response (the same as the accepted target when the motor model is off). `startup_fraction` is the spin-up envelope in 0..1, and `motor_command_thrust_n` is the static thrust target for the accepted rotor speed; `allocated_thrust_n` keeps the closed-loop allocation result before the startup scaling.
 
-`external_wrench_b` 是 effects 扰动合力/合力矩（机体系），`gyroscopic_torque_b_nm` 是单独记录的旋翼陀螺力矩，二者之和才是提交给后端的附加力/力矩。`setpoint.jerk_w`、`setpoint.snap_w` 记录解析参考导数。`controller` 记录控制器类型 `kind` 及其自带明细：`geometric` 的 `force_derivative_source` 说明解析参考/数值反馈或限幅后全数值差分路径。姿态/角速度的“理想值”是控制器给出的期望姿态和期望角速度。`mission_phase` 为 `spin_up`（地面起转）及轨迹各段名称，例如 helix 任务为 `spin_up / takeoff / helix / hold`，hold 任务为 `hold`。`mission` 在配置了 `completion` 时保存 post-step 真值误差、连续达标时间、成功及超时标志，否则为 null。这些诊断位于 JSONL；基础 CSV 仍保留导师要求的运动与动力数据字段。
+`external_wrench_b` is the total disturbance force/torque from effects (body frame), and `gyroscopic_torque_b_nm` is the rotor gyroscopic torque, recorded separately; the sum of the two is the additional force/torque submitted to the backend. `setpoint.jerk_w` and `setpoint.snap_w` record the analytic reference derivatives. `controller` records the controller type `kind` and its own details: for `geometric`, `force_derivative_source` says whether the path is analytic reference/numerical feedback or full numerical differencing after limiting. The "ideal values" of attitude/angular velocity are the desired attitude and desired angular velocity given by the controller. `mission_phase` is `spin_up` (spin-up on the ground) or the name of a trajectory segment; for example, a helix mission has `spin_up / takeoff / helix / hold`, and a hold mission has `hold`. When `completion` is configured, `mission` stores the post-step ground-truth error, the continuous time within tolerance, and the success and timeout flags; otherwise it is null. These diagnostics are in the JSONL; the basic CSV still keeps the motion and dynamics data fields.

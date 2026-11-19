@@ -1,131 +1,131 @@
-# ARL-Robot-1 运动控制架构
+# ARL-Robot-1 Motion Control Architecture
 
-本项目以本地 ARL USD 和当前 `IsaacLab/` 源码为依据，面向 **单机、固定连接的刚体总成、PhysX**。通用运动控制基础设施已经接入原地起飞、三维圆柱 helix 上升和终点悬停任务。接口、配置校验与数值测试可在普通 Python 下运行；实际物理步进必须使用安装了当前 Isaac Lab / Isaac Sim 的环境。
+This project is based on the local ARL USD and the current `IsaacLab/` source code, and targets **a single vehicle, a rigid-body assembly with fixed joints, and PhysX**. The general motion control infrastructure already supports takeoff in place, a three-dimensional cylindrical helix climb, and hover at the end point. The interfaces, config validation and numerical tests can run in plain Python, but actual physics stepping requires an environment with the current Isaac Lab / Isaac Sim installed.
 
-## 1. 数据流与目录
+## 1. Data flow and directories
 
 ```text
-configs/*.yaml（extends 继承 + --set 覆盖）
+configs/*.yaml (inherited with extends + overridden with --set)
         │
-        ├── sim/：后端（isaaclab：USD + PhysX 实际质量/质心/惯量/几何；synthetic：CPU 合成刚体）
+        ├── sim/: backend (isaaclab: USD + PhysX actual mass/center of mass/inertia/geometry; synthetic: CPU synthetic rigid body)
         │
-        └── runtime.run_experiment（与后端无关：步进、记录、钩子）
-              └── runtime.MotionControlLoop（每物理步一次）
-                    ├── trajectories：分段轨迹的位置、速度、加速度、jerk、snap、偏航及其导数；起转阶段保持起点
-                    ├── sensors：步末由步首/步末真值合成 IMU/磁力计/气压计/GPS 读数（MATLAB 误差模型、延迟队列）
-                    ├── StateProvider：truth 真值 / shadow 估计器旁路记录 / closed_loop 控制器用估计值（estimation 包；滤波器留白）
-                    ├── control：注册的控制器（geometric / 注入实例）→ 质心力矩或每桨推力
-                    ├── control.BoundedAllocator：每桨有界推力目标 [N]
-                    ├── effects：每物理步的附加质心力/力矩（常值/OU 随机外扰、风、气动阻力）+ 旋翼陀螺力矩
-                    └── backend：RPS 电机动态（默认关闭）→ 每个旋翼独立施力 → 物理步进
-              钩子：轨迹叠加、同步多机位录像、墙钟节拍显示、metrics.json、PNG 图
+        └── runtime.run_experiment (backend-independent: stepping, recording, hooks)
+              └── runtime.MotionControlLoop (once per physics step)
+                    ├── trajectories: position, velocity, acceleration, jerk, snap, yaw and its derivatives of the segmented trajectory; holds the start point during spin-up
+                    ├── sensors: at the end of the step, IMU/magnetometer/barometer/GPS readings are synthesized from the ground truth at the start/end of the step (MATLAB error models, delay queues)
+                    ├── StateProvider: truth = ground truth / shadow = estimator runs alongside and is recorded / closed_loop = controller uses the estimate (estimation package; filters not implemented yet)
+                    ├── control: registered controller (geometric / injected instance) → force/torque about the center of mass, or per-rotor thrust
+                    ├── control.BoundedAllocator: bounded thrust target for each rotor [N]
+                    ├── effects: additional center-of-mass force/torque at each physics step (constant/OU random disturbance, wind, aerodynamic drag) + rotor gyroscopic torque
+                    └── backend: RPS motor dynamics (off by default) → force applied to each rotor separately → physics step
+              Hooks: trajectory overlay, synchronized multi-view video recording, wall-clock paced display, metrics.json, PNG plots
 ```
 
-| 目录/文件 | 责任 |
+| Directory/file | Responsibility |
 |---|---|
-| `isaac_drone/core/` | 统一状态、质心惯量、轨迹、力/力矩契约（`types`）；SO(3) 数学（`rotations`）；数值校验；插件参数解析（`params`）与注册表（`registry`） |
-| `isaac_drone/config/` | 严格 YAML 解析、`extends` 合并、`--set` 覆盖、重复/未知字段检查、物理量与跨字段验证、本地资产检查 |
-| `isaac_drone/trajectories/` | `SegmentedTrajectory` 框架、hold、C4 三维圆柱 helix、时间律、最短时间规划、可行性筛查、终点完成判据 |
-| `isaac_drone/control/` | 控制器接口与注册表、几何控制（位置 PID、SO(3) 姿态、完整惯量前馈）、推力方向限幅、有界控制分配 |
-| `isaac_drone/effects/` | 常值外力/力矩、OU 随机外扰、风场、阵风、相对气流阻力；扰动组合、作用点与参考系转换、时间窗 |
-| `isaac_drone/sensors/` | 噪声过程（白噪声、随机游走、高斯-马尔可夫、MATLAB 衰减递推）、`imuSensor` 误差链（`triaxial`）、步内真值运动学与比力（`truth`）、四个传感器、采样率/延迟/随机流管理（`suite`） |
-| `isaac_drone/estimation/` | 估计模式与估计器契约（`base`）、`passthrough` 状态提供者、估计/控制误差定义（`errors`）；滤波器（姿态、高度、15 维误差状态 EKF）留待下一阶段 |
-| `isaac_drone/runtime/` | 控制降频、物理步调度、起转包络、`model_mismatch` 标称模型、旋翼陀螺力矩、复位及异常状态处理（`loop`）；运行器与钩子（`runner`、`hooks`） |
-| `isaac_drone/sim/` | 后端/驱动接口（`base`）、原生电机积分复用（`actuation`、`native_thruster`）、CPU 合成对象（`synthetic`）、离线 USD 审计（`usd_audit`） |
-| `isaac_drone/sim/isaaclab/` | Isaac Lab API、四元数转换、真实几何/惯量提取、原生电机与施力（`backend`）；场景、驱动、串流界面刷新（`app`）；独立相机采集（`camera`） |
-| `isaac_drone/telemetry/` | 每步真实运动数据、完整角动量差分、位置误差及力/力矩阶段区分（`measurements`）；配置快照、资产层哈希、JSONL/CSV 与字段 schema（`recorder`） |
-| `isaac_drone/viz/` | 轨迹叠加几何、墙钟节拍、机位取景、多机位同步编码 |
-| `isaac_drone/analysis/` | 指标、分阶段汇总、多次运行对比、扫参、画图 |
-| `isaac_drone/cli.py` | `python -m isaac_drone` 命令行：validate / run / inspect / audit-usd / sweep / compare / summarize / plot |
+| `isaac_drone/core/` | Shared definitions of state, center-of-mass inertia, trajectory and force/torque (`types`); SO(3) math (`rotations`); numerical checks; plugin parameter parsing (`params`) and registry (`registry`) |
+| `isaac_drone/config/` | Strict YAML parsing, `extends` merging, `--set` overrides, checks for duplicate/unknown fields, validation of physical quantities and of relations between fields, local asset checks |
+| `isaac_drone/trajectories/` | `SegmentedTrajectory` framework, hold, C4 three-dimensional cylindrical helix, time laws, minimum-time planning, feasibility screening, completion criterion at the end point |
+| `isaac_drone/control/` | Controller interface and registry, geometric control (position PID, SO(3) attitude, full inertia feedforward), thrust direction limiting, bounded control allocation |
+| `isaac_drone/effects/` | Constant external force/torque, OU random disturbance, wind field, gusts, drag from relative airflow; combining disturbances, application points and frame conversion, time windows |
+| `isaac_drone/sensors/` | Noise processes (white noise, random walk, Gauss-Markov, MATLAB decay recursion), the `imuSensor` error chain (`triaxial`), ground-truth kinematics and specific force within a step (`truth`), the four sensors, management of sample rates/delays/random streams (`suite`) |
+| `isaac_drone/estimation/` | Estimation modes and the estimator interface (`base`), the `passthrough` state provider, definitions of estimation/control errors (`errors`); the filters (attitude, altitude, 15-dimensional error-state EKF) are left for the next stage |
+| `isaac_drone/runtime/` | Control decimation, physics step scheduling, spin-up envelope, the nominal model for `model_mismatch`, rotor gyroscopic torque, reset and handling of abnormal states (`loop`); runner and hooks (`runner`, `hooks`) |
+| `isaac_drone/sim/` | Backend/driver interface (`base`), reuse of the native motor integration (`actuation`, `native_thruster`), CPU synthetic plant (`synthetic`), offline USD check (`usd_audit`) |
+| `isaac_drone/sim/isaaclab/` | Isaac Lab API, quaternion conversion, extraction of the real geometry/inertia, native motors and force application (`backend`); scene, driver, refreshing the streaming UI (`app`); standalone camera capture (`camera`) |
+| `isaac_drone/telemetry/` | Actual motion data at each step, full angular momentum differencing, position error and the separation of force/torque stages (`measurements`); config snapshot, asset layer hashes, JSONL/CSV and the field schema (`recorder`) |
+| `isaac_drone/viz/` | Trajectory overlay geometry, wall-clock pacing, camera framing, synchronized multi-view encoding |
+| `isaac_drone/analysis/` | Metrics, per-phase summaries, comparison of multiple runs, parameter sweeps, plotting |
+| `isaac_drone/cli.py` | The `python -m isaac_drone` command line: validate / run / inspect / audit-usd / sweep / compare / summarize / plot |
 
-## 2. 已确认的资产事实与来源
+## 2. Model parameters and where they come from
 
-参考源码：
+Reference source code:
 
 - `IsaacLab/source/isaaclab_assets/isaaclab_assets/robots/arl_robot_1.py`
-- `IsaacLab/source/isaaclab_contrib/isaaclab_contrib/actuators/thruster.py` 和 `thruster_cfg.py`
+- `IsaacLab/source/isaaclab_contrib/isaaclab_contrib/actuators/thruster.py` and `thruster_cfg.py`
 - `IsaacLab/source/isaaclab_contrib/isaaclab_contrib/assets/multirotor/`
 - `IsaacLab/source/isaaclab_contrib/isaaclab_contrib/controllers/`
-- `assets/Robots/NTNU/ARL-Robot-1/` 的全部 USD 层
+- All USD layers under `assets/Robots/NTNU/ARL-Robot-1/`
 
-对当前资产进行了真实 USD 读取，而非从文件名推测：
+The parameters below are read directly from the current USD model file:
 
-- 一个 `base_link`、四个旋翼刚体、四个 **固定关节**。
-- USD 显式质量约为机身 1.20 kg、各旋翼 0.01 kg，总和约 1.24 kg。此数值仅用于资产审计；控制器每次从 PhysX 加载结果取值，不在控制器里写死。
-- 旋翼原点为 BL=(-0.10,+0.10,0)、BR=(-0.10,-0.10,0)、FL=(+0.10,+0.10,0)、FR=(+0.10,-0.10,0)，单位 m，相对根链接。
-- USD 中质心为未显式填写的默认值，不能把它替换成零。运行时使用 PhysX 求值后的质心。
-- 上游参考分配矩阵使用 ±0.13 m，符号/排列也与实际几何不一致；其旋向 `[-1,+1,-1,+1]` 与实际位置组合后，集体推力/滚转/俯仰/偏航矩阵秩为 3。
-- 用户明确选择**对角同向仿真配置**。当前动作顺序固定为 `[back_left, back_right, front_left, front_right]`，方向系数为 `[-1,+1,+1,-1]`，来源标记 `simulation_diagonal_pairs`。这不是实机测量，也不根据静态桨叶网格猜测 CW/CCW。
+- The asset contains one `base_link`, four rotor rigid bodies and four **fixed joints**.
+- The masses written in the USD are about 1.20 kg for the body and 0.01 kg for each rotor, about 1.24 kg in total. This value is only used to check the model. The mass used by the controller is read from the PhysX loading result every time.
+- The rotor origins are BL=(-0.10,+0.10,0), BR=(-0.10,-0.10,0), FL=(+0.10,+0.10,0), FR=(+0.10,-0.10,0), in m, relative to the root link.
+- The center of mass in the USD is a default value that was not written out, so it cannot be replaced with zero. At run time the center of mass evaluated by PhysX is used.
+- The upstream reference allocation matrix uses ±0.13 m, and its signs/ordering also do not match the actual geometry. When its spin directions `[-1,+1,-1,+1]` are combined with the actual positions, the collective thrust/roll/pitch/yaw matrix has rank 3.
+- The **diagonal same-direction simulation configuration** is used. The current action order is fixed as `[back_left, back_right, front_left, front_right]`, the direction coefficients are `[-1,+1,+1,-1]`, and the source tag is `simulation_diagonal_pairs`. These directions are a setting in the simulation, not values measured on the real vehicle.
 
-`rotor_directions` 沿用原生字段名；后端使用它决定 `torque_to_thrust_ratio * thrust` 的反扭矩符号。将来接实机时必须同时核对转子物理旋向、电机编号、反扭矩正号与坐标系。
+`rotor_directions` keeps the native field name, and the backend uses it to decide the sign of the reaction torque `torque_to_thrust_ratio * thrust`. When a real vehicle is connected in the future, the physical spin direction of the rotors, the motor numbering, the positive sign of the reaction torque and the coordinate frame must all be checked together.
 
-分配矩阵依据实际模型构建：每列由推力单位轴和 `(旋翼位置 - 整机质心) × 推力轴 + 反扭矩` 构成。YAML 的上游矩阵仅保留作差异诊断。改动 USD 几何后无需手工假设相同臂长。
+The allocation matrix is built from the actual model: each column consists of the thrust unit axis and `(rotor position - vehicle center of mass) × thrust axis + reaction torque`. The upstream matrix in the YAML is kept only for diagnosing differences. After the USD geometry is changed, there is no need to assume the same arm length by hand again.
 
-## 3. 坐标、质量与惯量
+## 3. Coordinates, mass and inertia
 
-- 世界系 Z 向上，所有数值使用 SI。
-- 项目四元数一律 **wxyz**，表示机体系到世界系。当前本地 Isaac Lab 3.0 状态/写入接口使用 **xyzw**，只在接入边界转换。
-- `VehicleState.position_w/linear_velocity_w` 为**整机质心**的位置/速度；`angular_velocity_b` 是机体系角速度。
-- `Wrench` 为绕整机质心、以机体系表示的 `[Fx,Fy,Fz,Tx,Ty,Tz]`。
-- YAML `initial_state.pos` 保留原生根链接原点位置语义；`lin_vel` 是原生根刚体质心的世界系线速度，`ang_vel` 是世界系角速度。它们与共享状态的定义刻意分开，由后端转换。
-- 整机惯量由全部刚体的质量、实际质心、惯量主轴姿态和完整惯量张量，通过旋转和平行轴定理求和。不会假定质心为零、惯量对角或各旋翼质量忽略不计。
-- 四个旋翼推力和反扭矩分别施加在对应旋翼刚体的原点，经固定关节传递；不会向根刚体提交控制器的整机目标 wrench。只有显式配置的外部扰动力作用在根刚体，其力矩按整机质心与根刚体质心偏移转换。整机合力/力矩仅用于控制分配和日志诊断。
+- The world frame has Z up, and all values use SI units.
+- Quaternions in the project are always **wxyz** and represent the rotation from the body frame to the world frame. The state/write interfaces of the current local Isaac Lab 3.0 use **xyzw**, so the conversion is done only at the interface boundary.
+- `VehicleState.position_w/linear_velocity_w` are the position/velocity of the **vehicle center of mass**; `angular_velocity_b` is the angular velocity in the body frame.
+- `Wrench` is `[Fx,Fy,Fz,Tx,Ty,Tz]` about the vehicle center of mass, expressed in the body frame.
+- The YAML `initial_state.pos` keeps the native meaning, which is the position of the root link origin; `lin_vel` is the world-frame linear velocity of the native root rigid body's center of mass, and `ang_vel` is the world-frame angular velocity. They are kept separate from the definition of the shared state on purpose, and the backend converts between them.
+- The vehicle inertia is summed from the mass, actual center of mass, principal-axis orientation and full inertia tensor of every rigid body, using rotation and the parallel axis theorem. The calculation uses the actual center-of-mass position and the full inertia tensor, and includes the mass of each rotor.
+- The thrust and reaction torque of the four rotors are applied at the origin of each rotor rigid body and passed through the fixed joints. The controller's whole-vehicle target wrench is not submitted to the root rigid body. Only external disturbance forces that are explicitly configured act on the root rigid body, and their torque is converted using the offset between the vehicle center of mass and the root rigid body's center of mass. The total force/torque of the vehicle is only used for control allocation and for diagnostics in the logs.
 
-OpenUSD 的 `diagonalInertia` 是主轴坐标中的惯量，`principalAxes` 是该主轴相对 prim 的姿态；`centerOfMass` 位于 prim 局部坐标。参见 [OpenUSD MassAPI](https://openusd.org/25.11/api/class_usd_physics_mass_a_p_i.html)。PhysX `get_inertias` 的 COM local frame 语义参见 [Omni Physics Tensor API](https://docs.omniverse.nvidia.com/kit/docs/omni_physics/108.0/extensions/runtime/source/omni.physics.tensors/docs/api/python.html)。
+OpenUSD's `diagonalInertia` is the inertia in principal-axis coordinates, and `principalAxes` is the orientation of the principal axes relative to the prim; `centerOfMass` is in the prim's local coordinates. See [OpenUSD MassAPI](https://openusd.org/25.11/api/class_usd_physics_mass_a_p_i.html). For the COM local frame meaning of PhysX `get_inertias`, see [Omni Physics Tensor API](https://docs.omniverse.nvidia.com/kit/docs/omni_physics/108.0/extensions/runtime/source/omni.physics.tensors/docs/api/python.html).
 
-## 4. 配置的可写范围
+## 4. What can be configured
 
-基础配置是 `configs/arl_robot_1.yaml`；每次实验写一个用 `extends` 继承它的文件并传 `--config`，或用 `--set` 单次覆盖（见 [configuration.md](configuration.md)）。未识别字段、重复 YAML key、NaN/Inf、错误单位形状、负时间常数都会报错。
+The base config is `configs/arl_robot_1.yaml`. Each experiment can use a file that inherits it with `extends` and is passed with `--config`, or a one-off override with `--set` (see [configuration.md](configuration.md)). Unrecognized fields, duplicate YAML keys, NaN/Inf, wrong unit shapes and negative time constants all raise an error.
 
-- `simulation`：物理步长、控制降频、渲染降频、重力、设备、随机种子、时长。
-- `recording`：默认关闭；帧率默认 60、每机位 1280×720，可选 `overview/follow/top` 的非空无重复列表。旧配置省略整段时补默认值；启用时帧率不超过物理频率，图像尺寸为正偶数。CLI 可单次覆盖开关、帧率、尺寸和机位。
-- `vehicle.thrusters`：上游全部动力学字段，保留推力上下限、推力系数范围、上升/下降时间常数、反扭矩系数、速率限制、积分方式、离散近似。
-- `vehicle.initial_state`：完整姿态、位置、速度、每个旋翼初始 rps。
-- `vehicle.launch`：地面高度、初始间隙及是否按真实碰撞体计算初始 root Z；启用时要求零初速度和零电机转速。计算包含 instance proxy 内的启用碰撞体，并重算形状 extent，避免当前资产的过期 authored extent 造成穿地。只在 reset 初始化时写入该位置。
-- `vehicle.native_overrides`：递归覆盖当前原生机器人配置，含刚体、关节、碰撞、质量、材质等。未知原生字段在实例化原生配置时拒绝。
-- `simulation.native_overrides`：原生 `SimulationCfg` / `PhysxCfg` 的其余参数。无须为了暴露某个 PhysX 字段重写整个配置类。
-- 主字段如 dt、资产路径、动作顺序使用单一来源，禁止在 native overrides 中重复覆盖，避免控制器与物理模型各用一套值。
-- `vehicle.usd_overrides`：启动场景后、物理初始化前修改已有 prim 的质量、质心、主惯量和主轴属性，不回写原始 USD 文件。例如：
+- `simulation`: physics step size, control decimation, render decimation, gravity, device, random seed, duration.
+- `recording`: off by default. The default frame rate is 60, each camera view is 1280×720, and the camera views can be any non-empty list without duplicates chosen from `overview/follow/top`. When an old config omits the whole section, the default values are filled in. When recording is enabled, the frame rate must not exceed the physics rate and the image dimensions must be positive even numbers. The CLI can override the switch, frame rate, size and camera views for a single run.
+- `vehicle.thrusters`: all upstream dynamics fields, keeping the thrust limits, the thrust coefficient range, the rise/fall time constants, the reaction torque coefficient, the rate limit, the integration method and the discrete approximation.
+- `vehicle.initial_state`: full attitude, position, velocity, and the initial rps of each rotor.
+- `vehicle.launch`: ground height, initial clearance, and whether the initial root Z is computed from the real collision bodies; when enabled, zero initial velocity and zero rotor speed are required. The calculation includes the enabled collision bodies inside instance proxies and recomputes the shape extent, so that the outdated authored extent of the current asset does not put the vehicle through the ground. This position is written only during reset initialization.
+- `vehicle.native_overrides`: recursively overrides the current native robot config, including rigid bodies, joints, collision, mass, materials and so on. Unknown native fields are rejected when the native config is instantiated.
+- `simulation.native_overrides`: the remaining parameters of the native `SimulationCfg` / `PhysxCfg`. This way the whole config class does not have to be rewritten just to expose one PhysX field.
+- Main fields such as dt, the asset path and the action order have a single source and cannot be overridden again in native overrides, so that the controller and the physics model do not end up using two different values.
+- `vehicle.usd_overrides`: after the scene starts and before physics is initialized, modifies the mass, center of mass, principal inertia and principal-axis attributes of existing prims, without writing back to the original USD file. For example:
 
 ```yaml
 usd_overrides:
   - prim_path: base_link
     attribute: physics:centerOfMass
-    value: [0.01, 0.0, 0.0]  # 示例格式，不是本项目默认物理参数
+    value: [0.01, 0.0, 0.0]  # example format, not a default physical parameter of this project
 ```
 
-不能用 `null` 假装实测零值。原生覆盖中的 null 保留原生值；未填写的电池/气动标定值表示未知，开启后必须补齐。原生配置本身已有的 `linear_damping=0` 等数值注明其上游来源，不将它们表述为真实飞行器无阻力。
+`null` does not mean that the measured value is zero. A null in the native overrides means the native value is kept; aerodynamic calibration values that are not filled in are unknown and must be filled in once the feature is enabled. Values that the native config already has, such as `linear_damping=0`, are marked with their upstream source, and these values do not mean that the real vehicle has no drag.
 
-可写不代表每种物理设置适用于当前控制器。自由飞行要求重力与控制配置一致、刚体动态启用、无固定基座，且四个推力轴均沿机体 +Z。倾转旋翼、可动内部关节、系留约束、运动学机体需要相应控制器/后端扩展；检查模式允许审计，飞行前会拒绝不兼容组合。
+Fields can be changed, but not every physical setup works with the current controller. Free flight requires gravity to match the control config, rigid-body dynamics to be enabled, no fixed base, and all four thrust axes to point along body +Z. Tilting rotors, movable internal joints, tether constraints and kinematic bodies need matching controller/backend extensions. In inspect mode these combinations can be examined, but incompatible combinations are rejected before flight.
 
-## 5. 时序、执行器与控制
+## 5. Timing, actuators and control
 
-默认物理步长 0.005 s、控制降频 2，即控制 100 Hz、电机和扰动 200 Hz。这是可修改的数值实验选择，未宣称它是硬件采样率或已经收敛的最佳步长。
+The default physics step size is 0.005 s and the control decimation is 2, which means a control rate of 100 Hz and a motor and disturbance rate of 200 Hz. These are settings for the numerical experiment and can be changed. They are unrelated to the hardware sample rate and are not necessarily the best step size.
 
-每个物理步：
+Each physics step runs in the following order:
 
-1. 读状态；若到控制时刻，采样轨迹并计算期望 wrench。
-2. 在当步有效推力包线内做有界加权分配。四旋翼枚举至多 81 个约束组合，求解加权最小二乘，记录实际分配残差，而不是简单伪逆后截断。
-3. 计算当步风/气动/外力；开启风作用到旋翼时，同时算出每个桨的等效转速偏移。
-4. 使用每个电机自己的采样 kf 将分配推力转为 **RPS** 命令；起转阶段有平滑启动包络。电机模型开启时直接积分 RPS，关闭时（默认，`vehicle.motor_model_enabled: false`）当步 RPS 等于受限后的指令；按 kf·RPS² 计算实际推力（有风作用到旋翼时按 kf·(RPS + 偏移)²），每个旋翼独立受力。向 PhysX 提交一次逐刚体数组，根刚体只有显式外部扰动。
-5. `sim.step()`，`robot.update(dt)`，记录真实推进器输出及状态，更新可选电池。
-6. 步末：用步首/步末真值合成传感器读数，交给状态提供者的 `update`；`read_state` 只查询不推进。第 k 步的读数在第 k+1 步控制器读状态之前到达，保证因果。
+1. Read the state; if it is a control instant, sample the trajectory and compute the desired wrench.
+2. Do a bounded weighted allocation within the thrust envelope that is valid for this step. For a quadrotor, at most 81 constraint combinations are enumerated, a weighted least-squares problem is solved, and the actual allocation residual is recorded. This is used instead of a simple pseudo-inverse followed by clipping.
+3. Compute the wind/aerodynamics/external force for this step; when wind on the rotors is enabled, also compute the equivalent rotor speed offset for each rotor.
+4. Convert the allocated thrust into an **RPS** command using each motor's own sampled kf; a smooth start-up envelope is applied during spin-up. When the motor model is on, RPS is integrated directly; when it is off (the default, `vehicle.motor_model_enabled: false`), the RPS of this step equals the limited command. The actual thrust is computed as kf·RPS² (kf·(RPS + offset)² when wind acts on the rotors), and the force is applied to each rotor separately. One per-rigid-body array is submitted to PhysX, and the root rigid body only receives explicit external disturbances.
+5. Call `sim.step()` and `robot.update(dt)`, and record the actual thruster output and state.
+6. At the end of the step, synthesize the sensor readings from the ground truth at the start/end of the step and pass them to the state provider's `update`; `read_state` only queries and does not advance anything. The readings of step k arrive before the controller reads the state in step k+1, so causality is preserved.
 
-传感器层的真值取法（`sensors/truth.py`）：角速度取步末机体角速度；比力是区间平均
+The ground truth used by the sensor layer is defined in `sensors/truth.py`: the angular rate is the body angular rate at the end of the step, and the specific force is the average over the interval
 
 $$
 f_b = R_{\text{pair}}^{\top}\left(\frac{\Delta v_w}{\Delta t} - g_w\right)
 $$
 
-Isaac 后端配步首姿态（外力按步首机体系施加并保持一步），合成后端配步首/步末的 slerp 中点姿态（RK4 各子步按当时姿态转换推力）；后端用 `specific_force_attitude_pairing` 声明。这样地面支撑力自动包含在内，静止时读数为 (0, 0, +9.81)。安装点的比力加杆臂项
+The Isaac backend pairs it with the attitude at the start of the step (external forces are applied in the body frame at the start of the step and held for one step). The synthetic backend pairs it with the slerp midpoint attitude between the start and end of the step (each RK4 substep converts the thrust with the attitude at that moment). Each backend declares the pairing it uses through `specific_force_attitude_pairing`. This way the ground support force is included automatically, and the reading at rest is (0, 0, +9.81). The specific force at the mounting point also needs the lever arm terms
 
 $$
 f_{\text{imu}} = f_b + \alpha_b \times r + \omega_b \times (\omega_b \times r)
 $$
 
-其中 `α_b` 由世界系角速度差分再转到步末机体系（与 `telemetry/measurements.py` 相同），`r` 是安装点相对质心的机体系位置。GPS 天线的位置 `p + R r`、速度 `v + R(ω × r)`，气压计取安装点世界 z。
+where `α_b` is obtained by differencing the world-frame angular velocity and then converting it to the body frame at the end of the step (the same as in `telemetry/measurements.py`), and `r` is the body-frame position of the mounting point relative to the center of mass. The GPS antenna position is `p + R r`, its velocity is `v + R(ω × r)`, and the barometer takes the world z of the mounting point.
 
-误差链按 MATLAB `imuSensor` 的 Algorithms 顺序（`sensors/triaxial.py`）：安装误差 + 常值零偏 → 零偏不稳定性 → 白噪声 → 随机游走 → 温漂 → 陀螺 g 敏感性 → 温度标度 → 饱和 → 量化：
+The error chain follows the Algorithms order of MATLAB `imuSensor` (`sensors/triaxial.py`): misalignment and constant bias, bias instability, white noise, random walk, temperature drift, gyroscope g-sensitivity, temperature scale factor, saturation, and quantization:
 
 $$
 d = \Big[\tfrac{M}{100} a + b_0 + \beta_1 + \beta_2 + \beta_3 + (T-25)\,b_T + k_g f\Big]\Big(1 + \tfrac{T-25}{100}\,s_T\Big),\qquad
@@ -138,7 +138,7 @@ $$
 \beta_1(k) = e^{-\Delta t/\tau}\beta_1(k-1) + \sigma_B\sqrt{1-e^{-2\Delta t/\tau}}\,w(k)
 $$
 
-`s` 为 2（`double-sided`，MATLAB 默认，对应手册单边密度）或 1（`single-sided`）；`β₁` 用平稳标准差 `σ_B` = BiasInstability、相关时间 `τ` 的高斯-马尔可夫过程代替 MATLAB 的 1/f 滤波，精确离散与 `effects/stochastic.py` 相同。气压计和 GPS 按 `altimeterSensor` / `gpsSensor`：
+`s` is 2 (`double-sided`, the MATLAB default, which corresponds to the single-sided density in datasheets) or 1 (`single-sided`). `β₁` uses a Gauss-Markov process with stationary standard deviation `σ_B` = BiasInstability and correlation time `τ` in place of MATLAB's 1/f filter, and it is discretized exactly in the same way as `effects/stochastic.py`. The barometer and GPS follow `altimeterSensor` / `gpsSensor`:
 
 $$
 z_{\text{baro}} = z + b_0 + w\sqrt{\tfrac{f_s}{s}}\,N + \beta(k),\qquad
@@ -146,46 +146,44 @@ z_{\text{baro}} = z + b_0 + w\sqrt{\tfrac{f_s}{s}}\,N + \beta(k),\qquad
 e_{\text{gps}}(k) = a\,e_{\text{gps}}(k-1) + \sigma\,w(k)
 $$
 
-`a` 为 DecayFactor：0 为白噪声、1 为随机游走（MATLAB 文档对两端的描述只与这个未归一化递推相容），平稳标准差 `σ/√(1−a²)`，时间常数 `−Δt/ln a`；GPS 速度误差为白噪声。磁力计读数为 `Rᵀ B_w + k_m Σ T_i^{1.5}` 再过同一误差链；IMU 另加随总推力/重量缩放的振动白噪声。随机数流 `SeedSequence([seed, 域标识])` 与扰动的 `SeedSequence(seed)` 独立。
+`a` is the DecayFactor. A value of 0 gives white noise and a value of 1 gives a random walk (the MATLAB documentation's description of the two ends is only consistent with this unnormalized recursion). The stationary standard deviation is `σ/√(1−a²)` and the time constant is `−Δt/ln a`; the GPS velocity error is white noise. The magnetometer reading is `Rᵀ B_w + k_m Σ T_i^{1.5}`, which then goes through the same error chain; the IMU also gets vibration white noise that scales with total thrust/weight. The random stream `SeedSequence([seed, domain tag])` is independent of the disturbance stream `SeedSequence(seed)`.
 
-电机模型开启时，原生电机保留 `kf` 和 tau 的复位随机采样、非对称动态、rps² 推力关系、RK4/Euler、饱和；关闭时只保留 kf 采样、rps² 推力关系和转速上下限，没有响应延迟。最短时间规划始终按 tau 范围留超前余量，所以开关电机模型不改变参考轨迹。`max_thrust_rate` 虽沿用原生字段名/配置值，源码在 rps 误差积分中限幅，不能按名字误读成严格 N/s；日志记录真实采样的 kf/tau。
+When the motor model is on, the native motor keeps the random sampling of `kf` and tau at reset, the asymmetric dynamics, the rps² thrust relation, RK4/Euler, and saturation. When it is off, only the kf sampling, the rps² thrust relation and the rotor speed limits are kept, and there is no response delay. Minimum-time planning always leaves a lead margin based on the tau range, so turning the motor model on or off does not change the reference trajectory. `max_thrust_rate` keeps the native field name/config value, but the source code applies the limit in the integration of the rps error, so it should not be read as a strict N/s limit just because of its name. The logs record the kf/tau that were actually sampled.
 
-当前上游实现还有两个已局部兼容处理的初始化问题：推进器创建时可能拿到尚未填充的初始 rps 副本；reset 将 rps 写进 N-valued 目标。后端复位时重新绑定初始 rps，并在第一次动力学更新前以真实初始推力覆盖目标。没有修改 `IsaacLab/` 官方副本。
+The current upstream implementation has two initialization problems, and local workarounds are in place. First, the thruster may get a copy of the initial rps that has not been filled in yet when it is created. Second, reset writes rps into the N-valued target. The workaround is that the backend rebinds the initial rps at reset and overwrites the target with the real initial thrust before the first dynamics update. The official copy of `IsaacLab/` is not modified.
 
-位置环输出加速度指令；姿态环使用直接力矩增益，带完整 `ω×Jω` 和期望角加速度前馈。轨迹可以给速度、加速度、jerk、snap 及偏航导数。提供 jerk/snap 且未限幅时，参考力的导数采用解析值，反馈部分仍为数值差分；限幅后退回整个力向量的差分，避免对投影后的力使用错误解析导数。位置积分默认开启（P、I、D 全开），包含逐轴积分限制和分配反馈防饱和；某轴 `position_ki` 填 0 即关闭该轴积分。
+The position loop outputs an acceleration command. The attitude loop uses direct torque gains, with full `ω×Jω` and desired angular acceleration feedforward. The trajectory can provide velocity, acceleration, jerk, snap and yaw derivatives. When jerk/snap are provided and no limiting occurs, the derivative of the reference force uses the analytic value and the feedback part still uses numerical differencing; after limiting, it falls back to differencing the whole force vector, to avoid using a wrong analytic derivative for the projected force. The position integral is on by default (P, I and D all on) and includes per-axis integral limits and anti-windup through allocation feedback; setting `position_ki` to 0 on an axis turns off the integral on that axis.
 
-适用范围必须明确：当前姿态控制器面向直立飞行；SO(3) 平滑误差在精确 180° 存在平衡点。没有提供 jerk/snap 时，推力方向导数由历史差分得到，首帧尚无历史，突变参考与噪声会造成导数瞬态。`max_yaw_rate_rad_s` 限制角速度前馈，不会自动把偏航角阶跃规划成平滑转弯。
+The range of application needs to be stated here: the current attitude controller is designed for upright flight, and the smooth SO(3) error has an equilibrium at exactly 180°. When jerk/snap are not provided, the derivative of the thrust direction comes from history differencing; there is no history at the first frame, and abrupt references and noise cause transients in the derivative. `max_yaw_rate_rad_s` limits the angular rate feedforward, and it does not turn a yaw angle step into a smooth turn automatically.
 
-`prepare_step/finish_step` 必须成对调用。任意插件或推进失败后禁止继续重试同一帧，以免重复积分电量或控制器状态；需要完整 reset。仿真暂停不会推进模型，停止后结束本次运行。
+`prepare_step/finish_step` must be called in pairs. After any plugin or stepping failure, the same frame must not be retried, so that the controller state is not integrated twice; a full reset is needed in this case. When the simulation is paused the model does not advance, and when the simulation stops the run ends.
 
-## 6. 扰动和气动扩展
+## 6. Disturbances and aerodynamic extensions
 
-默认开启：
+On by default:
 
-- `ou_wrench`：Kidambi 式随机外扰 d1/d2——力在世界系作用于质心、力矩在机体系，各为均值 + 逐轴标准差 + 相关时间的 OU 过程（平稳初始化、精确离散、按 `simulation.seed` 复现）。默认力均值 [1,0,0] N、各轴标准差 0.5 N、τ=1 s、力矩为零，是演示量级而非标定值；地面起飞的 `helix.yaml` 从起转结束（2 s）起作用，避免飞机在地面被推滑。
+- `ou_wrench`: Kidambi-style random disturbances d1/d2. The force acts on the center of mass in the world frame and the torque is in the body frame. Each is an OU process described by a mean, a per-axis standard deviation and a correlation time (stationary initialization, exact discretization, reproducible from `simulation.seed`). By default the force mean is [1,0,0] N, the standard deviation on each axis is 0.5 N, τ=1 s, and the torque is zero. This is a demonstration magnitude, not a calibrated value. In `helix.yaml`, which takes off from the ground, the disturbance starts when spin-up ends (2 s), so that the vehicle is not pushed along the ground.
 
-已实现但默认关闭：
+Implemented but off by default:
 
-- 世界系或机体系的常值力/力矩、起止时间窗、相对质心或世界绝对作用点。
-- 均匀风、空间梯度、平滑或阶跃阵风、可复现的 OU 随机风（逐世界轴，或沿自定义方向的单个过程；平稳初始化）；整个风场有起止时间窗，开窗时直接满强度出现。
-- 风作用到旋翼（`rotor_wind`），按机体系分工：沿桨轴的风换算成每桨等效转速偏移，在电机模型之后叠加（推力与反扭矩按 kf·(RPS + 偏移)²）；桨盘平面内的风作为质心阻力。只算风本身，不含飞机自身运动。公式与系数来源见 configuration.md。
-- 相对风速的线性矩阵阻力、逐轴二次阻力、角速度阻力、压力中心力臂。
+- Constant force/torque in the world frame or body frame, start and end time windows, and application points relative to the center of mass or absolute in the world.
+- Uniform wind, spatial gradient, smooth or step gusts, and reproducible OU random wind (per world axis, or a single process along a custom direction; stationary initialization). The whole wind field has a start/end time window, and it appears at full strength when the window opens.
+- Wind on the rotors (`rotor_wind`), split in the body frame: wind along the rotor axis is converted into an equivalent rotor speed offset for each rotor and added after the motor model (thrust and reaction torque use kf·(RPS + offset)²); wind in the rotor disk plane acts as drag at the center of mass. Only the wind itself is counted, not the vehicle's own motion. The formulas and the sources of the coefficients are in configuration.md.
+- Linear matrix drag on relative wind speed, per-axis quadratic drag, angular rate drag, and a center-of-pressure arm.
 
-气动开启时要求明确风场，即使选择静风，也要写出 `[0,0,0]`。阻力计算包含作用点的 `ω×r` 速度。矩阵阻尼检查耗散性；风可以向飞行器输入能量，因此不会错误地强制世界系总做功永远为负。
+When aerodynamics is enabled, the wind field must be written out; even for still air, `[0,0,0]` must be written. The drag calculation includes the `ω×r` velocity of the application point. Matrix damping is checked for dissipativity. Wind can put energy into the vehicle, so the total work in the world frame is not required to be always negative.
 
-例如额外横风只能先配置风速，还必须填入已辨识的阻力参数，不能自动以某个“典型无人机系数”代替；`rotor_wind` 的两个系数同样没有默认值，必须显式填写并注明来源。地面效应、桨间干扰、诱导流、叶片拍振、平移升力等尚未建立专用物理模型；未来通过 `EffectModel` 或执行器插件接入，不填虚构参数。
+For example, to add an extra crosswind, the identified drag parameters must be filled in as well as the wind speed, and the program does not provide a default such as a "typical drone coefficient"; the two `rotor_wind` coefficients also have no defaults and must be filled in explicitly with their source. Ground effect, rotor-rotor interference, induced flow, blade flapping, translational lift and similar effects do not have dedicated physical models yet. They will be added later through `EffectModel` or actuator plugins.
 
-旋翼陀螺力矩默认关闭（`vehicle.rotor_inertia_kg_m2: null`）：τg = ω × (J_r e3 Σ σ_i Ω_i)（arXiv 2609.12188 式 7），σ_i 取 `rotor_directions`（反扭矩符号），Ω_i 为当步实际转速；开启时填 J_r，3.5e-5 是按 8 英寸桨估算的占位量级值，待实测替换。Isaac 后端复位时按 `thrust_const_range` 给每个电机随机采样 kf，四个转速不对称会使转子净角动量不抵消，陀螺力矩可被放大到与控制力矩同量级（最短时间 helix 叠加失配与 OU 时失控），开启前应先固定 kf。
+The rotor gyroscopic torque is off by default (`vehicle.rotor_inertia_kg_m2: null`). It is computed as τg = ω × (J_r e3 Σ σ_i Ω_i) (arXiv 2609.12188, Eq. 7), where σ_i is taken from `rotor_directions` (the reaction torque sign) and Ω_i is the actual rotor speed at this step. J_r must be filled in to enable it; 3.5e-5 is a placeholder of the right order of magnitude estimated for an 8-inch propeller and needs to be replaced once it is measured. At reset the Isaac backend randomly samples kf for each motor from `thrust_const_range`. Unequal speeds on the four rotors mean the net rotor angular momentum does not cancel, and the gyroscopic torque can grow to the same order as the control torque (a minimum-time helix combined with mismatch and OU goes out of control), so kf should be fixed before enabling it.
 
-## 7. 模型失配与电池
+## 7. Model mismatch
 
-`model_mismatch` 按 Kidambi（IEEE Access 2025，II-C 节的 Δm、ΔI、ΔK_T、ΔK_D）定义对象实际值与控制器标称值之比：控制器、分配器和最短时间规划使用“后端真值 ÷ 比值”的标称质量、惯量（逐轴同余缩放，保持对称正定）、推力系数与反扭矩系数，对象仍按真值运动；推力系数失配时实际每桨推力 = 比值 × 控制器以为的推力，转速上下限保持为硬件限制。全部为 1 即无失配，也是默认值；例如 `mass_ratio: 1.2` 表示对象比控制器以为的重 20%（位置积分关闭时悬停会稳态下沉 g·0.2/kp_z，积分开启后消除）。可用 `sweep --grid model_mismatch.mass_ratio=[...]` 扫描。
+`model_mismatch` follows Kidambi (IEEE Access 2025, Δm, ΔI, ΔK_T, ΔK_D in Section II-C) and defines the ratio of the plant's actual value to the controller's nominal value. The controller, the allocator and the minimum-time planner use the nominal mass, inertia (scaled per axis by congruence, which keeps it symmetric positive definite), thrust coefficient and reaction torque coefficient given by "backend ground truth ÷ ratio", while the plant still moves according to the ground truth. With a thrust coefficient mismatch, the actual thrust of each rotor equals the ratio times the thrust the controller thinks it is commanding, and the rotor speed limits stay as hardware limits. When all ratios are 1 there is no mismatch, and this is the default. For example, `mass_ratio: 1.2` means the plant is 20% heavier than the controller thinks (with the position integral off, hover settles g·0.2/kp_z lower in steady state; with the integral on this offset is removed). It can be swept with `sweep --grid model_mismatch.mass_ratio=[...]`.
 
-电池模型已从代码中移除；是否以及如何接入电池–电机耦合，待与 Kidambi 确认后另行建模。
+## 8. Running and verification
 
-## 8. 运行与验证
-
-普通 Python 环境需要 NumPy、PyYAML；测试需要 pytest。可在自己的环境中以 editable 方式安装项目：
+A plain Python environment needs NumPy and PyYAML, and the tests also need pytest. In your own environment, use the following commands to install the project in editable mode and run the tests and config validation:
 
 ```bash
 python -m pip install -e '.[dev]'
@@ -193,47 +191,45 @@ python -m pytest -q
 python -m isaac_drone validate
 ```
 
-离线 USD 审计还需 `usd-core`（`pip install -e '.[usd]'`）；在不启动 Isaac Sim 的情况下可读取真实资产并查看未求值属性：
+The offline USD check also needs `usd-core` (`pip install -e '.[usd]'`). Use the following command to read the asset files and view unevaluated attributes without starting Isaac Sim:
 
 ```bash
 python -m isaac_drone audit-usd
 ```
 
-在已经正确安装依赖的 Isaac Lab 环境中（服务器激活 `env_isaacsim` 后），从本仓库根目录运行。Isaac Lab 3.0 已去掉 `--headless`，无画面运行用 `--visualizer none`：
+In an Isaac Lab environment with the dependencies installed correctly (on the server, after activating `env_isaacsim`), run the following commands from the root of this repository. Isaac Lab 3.0 removed `--headless`, so use `--visualizer none` to run without a display:
 
 ```bash
 python -m isaac_drone inspect --visualizer none
 python -m isaac_drone run --backend isaaclab --visualizer none --duration 10
 ```
 
-`inspect` 加载 PhysX 实际属性并打印分配矩阵/质量/惯量/采样参数，然后退出，不执行飞行控制。代码不会自动下载 29GB 运行环境，也不会切换到另一个机型。
+`inspect` loads the actual PhysX properties, prints the allocation matrix/mass/inertia/sampled parameters, and then exits without running flight control. The code does not download the 29GB runtime environment automatically, and it does not switch to another vehicle model.
 
-WebRTC 串流用 `--livestream 1`（公网，`PUBLIC_IP` 指定服务器 IP）。Isaac Lab 3.0 把串流主机视为 headless，步进时不会调用 `app.update()`，所以串流时 `sim/isaaclab/app.py` 在每个渲染步自行刷新 Kit 界面，并在刷新期间关闭 `playSimulations`，不额外推进物理。`--wait-for-start` 在场景加载后保持界面刷新、不推进物理，终端按回车后才开始任务。
+WebRTC streaming uses `--livestream 1` (public network, with `PUBLIC_IP` giving the server IP). Isaac Lab 3.0 treats the streaming host as headless and does not call `app.update()` when stepping, so when streaming, `sim/isaaclab/app.py` refreshes the Kit UI itself at every render step and turns off `playSimulations` during the refresh so that physics is not advanced an extra time. `--wait-for-start` keeps the UI refreshing after the scene loads without advancing physics, and the task starts only after Enter is pressed in the terminal.
 
-显示、录像、指标和画图都是运行器（`runtime/runner.py`）的钩子（`runtime/hooks.py`），不改变物理步进、控制时序和日志。有画面（串流或本地窗口）时，`DisplayHook` 与 `viz/pacing.py` 按墙钟对齐仿真时间，默认 `--playback-speed 1` 即真实时间；`0` 关闭对齐。每个渲染步：仿真超前就等待；刷新界面比帧间隔慢、仿真落后超过 50 ms 时跳过该帧，让物理追上，但至少每 0.25 s 画一帧。结束事件 `finished.playback` 记录墙钟时长、实际倍速、已画/跳过帧数和平均刷新耗时；若物理和记录本身就慢于实时，这里会如实显示达不到的倍速。`viz/overlay.py` 在 `/World/Visuals` 下创建纯显示用的 USD 几何（不带任何物理/碰撞 API）：绿色虚线为参考质心轨迹，红色实线为实际质心轨迹（每移动 5 mm 记一点，在渲染帧写入），绿色小球为当前时刻的参考点；`--no-path-overlay` 关闭。无画面且不录制时不创建这些几何，也不做墙钟对齐；离屏录制时也可保留轨迹叠加。
+Display, video recording, metrics and plotting are all hooks (`runtime/hooks.py`) of the runner (`runtime/runner.py`) and do not change physics stepping, control timing or logging. When there is a display (streaming or a local window), `DisplayHook` and `viz/pacing.py` align simulation time with the wall clock. The default `--playback-speed 1` plays in real time, and setting it to `0` turns the alignment off. At each render step, if the simulation is ahead, it waits; if refreshing the UI is slower than the frame interval and the simulation is more than 50 ms behind, that frame is skipped so that physics can catch up, but at least one frame is drawn every 0.25 s. The end event `finished.playback` records the wall-clock duration, the actual speed factor, the number of frames drawn/skipped and the average refresh time; if physics and recording are themselves slower than real time, this shows the lower speed factor that was actually reached. `viz/overlay.py` creates display-only USD geometry under `/World/Visuals` (without any physics/collision API): the green dashed line is the reference center-of-mass trajectory, the red solid line is the actual center-of-mass trajectory (one point for every 5 mm of movement, written at render frames), and the small green sphere is the reference point at the current time. `--no-path-overlay` turns the trajectory overlay off. With no display and no recording, this geometry is not created and there is no wall-clock alignment; the trajectory overlay can also be kept for off-screen recording.
 
-视频录制（`VideoHook`）不接入 `MotionControlLoop` 或动力学后端。`--record-video` 在 AppLauncher 启动前检查可选 `imageio-ffmpeg` 及编码器，并启用 `enable_cameras`（不启动 Isaac Lab 自带的 gym 录像链路）。`IsaacCameraRig`（`sim/isaaclab/camera.py`）为选定机位创建独立相机和 render product；全景按参考路径取景，跟随/俯视按每步实际质心定位。每次采集统一更新相机，调用 `sim.forward()` 同步 Fabric，再临时关闭 `playSimulations` 刷新一次 Kit，读取所有 RGB；不调用物理 step。非采集时暂停这些 render product，退出释放自身资源。
+Video recording (`VideoHook`) is not connected to `MotionControlLoop` or the dynamics backend. `--record-video` checks for the optional `imageio-ffmpeg` and the encoder before AppLauncher starts, and enables `enable_cameras` (the gym recording pipeline that comes with Isaac Lab is not started). `IsaacCameraRig` (`sim/isaaclab/camera.py`) creates a separate camera and render product for each selected camera view; the overview is framed from the reference path, and follow/top are positioned from the actual center of mass at each step. Each capture updates the cameras together, calls `sim.forward()` to sync Fabric, then temporarily turns off `playSimulations` and refreshes Kit once to read all RGB images; the physics step is not called. These render products are paused between captures, and their resources are released on exit.
 
-`MultiViewRecorder`（`viz/video.py`）以整数帧索引计算 `index/fps` 采样时刻，与 `render_interval`、墙钟显示节流分离。初始化相机/等待输入不编码；从任务 t=0 起采样，在到达采样时刻的物理步取图，终点处仅补齐早于终点的采样时刻。每次图像同时送入独立 MP4 与 `combined.mp4`，同步拼屏不经过事后时间匹配。编码器采用流式 FFmpeg/H.264（[imageio-ffmpeg 提供可执行文件](https://github.com/imageio/imageio-ffmpeg)），不会将整个实验的原始帧堆积在内存中。`video_frames.jsonl` 记录编码帧索引/视频时间/实际仿真采样时间；结束/中止事件记录各文件帧数及编码状态。运行器在正常完成、仿真停止及异常（含 Ctrl+C）时按相反顺序关闭全部钩子资源（相机先于编码器）。
+`MultiViewRecorder` (`viz/video.py`) computes the sampling instants `index/fps` from integer frame indices, separately from `render_interval` and the wall-clock display throttling. Nothing is encoded while the cameras are being initialized or while waiting for input. Sampling starts at task t=0, images are taken at the physics step that reaches each sampling instant, and at the end only the sampling instants earlier than the end point are filled in. Each image is sent to both the separate MP4 files and `combined.mp4` at the same time, so the synchronized tiled video does not need time matching afterwards. The encoder uses streaming FFmpeg/H.264 ([imageio-ffmpeg provides the executable](https://github.com/imageio/imageio-ffmpeg)), so the raw frames of the whole experiment do not pile up in memory. `video_frames.jsonl` records the encoded frame index/video time/actual simulation sampling time; the finish/abort events record the frame count and encoding status of each file. On normal completion, simulation stop and exceptions (including Ctrl+C), the runner closes all hook resources in reverse order (cameras before encoders).
 
-运行结果默认写到 `runs/<月日-时分>_<实验名>_<后端>[_video]/`（美东时间，`telemetry/naming.py`；重名加 `_2`），包含配置快照、实际物理参数、任务阶段时间表、git commit、命令行与 UTC 开始时间、`telemetry.jsonl`、`basic.csv`、`telemetry_schema.json`、`metrics.json` 和由它们生成的运行卡片 `README.md`（`analysis/catalog.py`，也供 `runs` 总表使用）；isaaclab 后端另记录所有本地 USD 层 SHA256，录制成功时把拼屏视频复制到 `runs/videos/<运行目录名>.mp4`。默认每物理步记录一次（当前200 Hz），包含位置、速度、加速度、四电机转速、力/力矩及位置误差；日志区分期望、分配结果、原生电机实际输出、附加力与运动推导的净作用。禁用电池记录 null，不记录虚构 SOC。完整字段和时间语义见 [telemetry.md](telemetry.md)。
+By default the run results are written to `runs/<MMDD-HHMM>_<experiment>_<backend>[_video]/` (US Eastern time, `telemetry/naming.py`; `_2` is appended when the name already exists). The directory contains the config snapshot, the actual physical parameters, the schedule of task phases, the git commit, the command line and UTC start time, `telemetry.jsonl`, `basic.csv`, `telemetry_schema.json`, `metrics.json`, and the run card `README.md` generated from them (`analysis/catalog.py`, also used by the `runs` summary table). The isaaclab backend also records the SHA256 of all local USD layers, and when recording succeeds it copies the tiled video to `runs/videos/<run directory name>.mp4`. By default one record is written per physics step (currently 200 Hz), including position, velocity, acceleration, the speeds of the four motors, force/torque and position error; the logs separate the desired value, the allocation result, the actual output of the native motors, the additional forces, and the net effect derived from the motion. The full fields and timing definitions are in [telemetry.md](telemetry.md).
 
-三维 helix 入口：
+The three-dimensional helix task is run with the following commands:
 
 ```bash
 python -m isaac_drone validate --config configs/helix.yaml
-# 然后在完整仿真 Python 环境中运行（无画面加 --visualizer none）
+# then run it in the full simulation Python environment (add --visualizer none to run without a display)
 python -m isaac_drone run --backend isaaclab --config configs/helix.yaml
 ```
 
-起点由 reset 后真实质心确定；`vehicle.launch.spin_up_s` 的起转阶段保持起点、电机指令按平滑包络放大，之后参考经过原地垂直起飞、恒定半径螺旋上升、平滑减速、无限期终点 hold。参考 C4 连续并提供解析四阶导数，数学推导和约束说明见 [spiral_math.md](spiral_math.md)。
+The start point is the real center of mass after reset. During the spin-up phase set by `vehicle.launch.spin_up_s`, the reference stays at the start point and the motor commands are scaled up by a smooth envelope. After that the reference goes through vertical takeoff in place, a constant-radius helix climb and a smooth deceleration, and finally holds at the end point indefinitely. The reference trajectory is C4 continuous and provides analytic fourth-order derivatives. The derivation and the constraints are explained in [spiral_math.md](spiral_math.md).
 
-运行前检查实际推力上下限下的悬停可行性、解析最大偏航速率及离散参考采样点的力矩/倾角可行性；这些检查不能替代有限电机响应、接触、扰动下的闭环验飞。`trajectories/completion.py` 每物理步用真实状态判定连续悬停时间，超时失败不会被迟到的状态重写。正常达到终点以后继续运行反馈控制。JSONL 的 `mission` 给出容差、停留时间和成功/超时状态，`finished.success` 是整个运行的最终判定。
+Before running, the code checks hover feasibility under the actual thrust limits, the analytic maximum yaw rate, and the torque/tilt feasibility at the discrete reference sample points. These checks cannot replace a closed-loop test flight with finite motor response, contact and disturbances. `trajectories/completion.py` uses the real state at every physics step to check the continuous hover time, and a timeout failure is not overwritten by a state that arrives later. After the end point is reached normally, feedback control keeps running. `mission` in the JSONL gives the tolerances, the dwell time and the success/timeout status, and `finished.success` is the final result of the whole run.
 
-## 9. 本次验证的边界
+## 9. Scope of verification
 
-已执行普通 Python 数值/契约测试、配置校验，并使用实际 USD 解析检查结构和参数。`tests/test_golden_regression.py` 用 CPU 合成对象锁定重构前的闭环轨迹（helix 20 s、hold 5 s），任何改变飞行行为的修改都会被发现。测试覆盖非零质心、非对角惯量、旋翼顺序、力矩作用点、分配饱和、复位与时间配对、扰动和电池能量等。
+So far the plain Python numerical tests, interface tests and config validation have been run, and the structure and parameters have been checked by parsing the actual USD. `tests/test_golden_regression.py` uses the CPU synthetic plant to lock the closed-loop trajectories from before the refactor (helix 20 s, hold 5 s), so any change that alters flight behavior is detected. The tests cover a nonzero center of mass, non-diagonal inertia, rotor order, torque application points, allocation saturation, reset and time pairing, disturbances and more.
 
-传感器层与估计接口（`sensors/`、`estimation/`）在合成后端上验证：开关传感器不改变飞行；`closed_loop` + `passthrough` 与真值飞行逐点一致（金标准回归）；噪声统计（白噪声 σ、Allan 斜率 ∓1/2、高斯-马尔可夫相关时间、衰减递推两端极限）、安装误差/饱和/量化、杆臂与配对姿态、采样率/延迟/时间戳均有单元测试。估计器算法本身尚未实现，Isaac 端的比力配对（步首姿态）尚待服务器实测。
-
-当前开发机器没有安装 Isaac Sim、Torch、Warp 完整运行栈，因此**尚未完成真实 PhysX 端到端悬停验飞**。假对象后端测试不替代该验证；提供 `--inspect` 和 `hold` 入口用于服务器后续实测。现有控制增益来自上游范围，尚未针对实际资产重新调参；没有声称这些增益已保证稳定飞行。
+The sensor layer and the estimation interface (`sensors/`, `estimation/`) have been verified on the synthetic backend: turning sensors on or off does not change the flight; `closed_loop` + `passthrough` matches the ground-truth flight point by point (golden regression); and there are unit tests for the noise statistics (white noise σ, Allan slope ∓1/2, Gauss-Markov correlation time, both limits of the decay recursion), misalignment/saturation/quantization, lever arm and paired attitude, and sample rate/delay/timestamps. The estimator algorithm itself has not been implemented yet, and the specific force pairing on the Isaac side (attitude at the start of the step) still needs to be measured on the server.

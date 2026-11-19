@@ -1,155 +1,155 @@
-# 实验配置与扩展（schema_version 2）
+# Experiment Configuration and Extension (schema_version 2)
 
-一次实验 = 一个 YAML 文件（可继承）+ 可选的命令行覆盖。所有配置在飞行前严格校验：未知字段、重复 key、NaN/Inf、错误向量长度、布尔值冒充数字都会报错，不会悄悄取默认值。
+An experiment consists of one YAML file (which can inherit from another) and optional command-line overrides. All configs are strictly validated before the flight: unknown fields, duplicate keys, NaN/Inf, wrong vector lengths, and a boolean written where a number is expected all raise an error, and default values are not substituted automatically.
 
-## 1. 文件组织与继承
+## 1. File organization and inheritance
 
-| 文件 | 内容 |
+| File | Contents |
 |---|---|
-| `configs/arl_robot_1.yaml` | 基础配置：仿真、机型、推进器、场景、日志、录制、默认几何控制器、空中初态定点悬停（hold） |
-| `configs/helix.yaml` | 继承基础配置：地面零转速起飞 + 最短时间 helix，完成判据 |
-| `configs/helix_moderate.yaml` | 继承 helix：同一几何、固定时长（约 3.3 m/s 峰值）的慢速版，给反馈留余量 |
-| `configs/helix_rotor_wind.yaml` | 继承 helix：关掉质心 OU 力，改用世界系风场作用到旋翼（只在 x 轴随机的 OU 示例，系数为注明来源的名义值） |
+| `configs/arl_robot_1.yaml` | Base config: simulation, vehicle, thrusters, scene, logging, recording, default geometric controller, hover in place from an airborne initial state (hold) |
+| `configs/helix.yaml` | Inherits the base config: ground takeoff from zero rotor speed + minimum-time helix, completion criterion |
+| `configs/helix_moderate.yaml` | Inherits helix: a slower version with the same geometry and a fixed duration (peak about 3.3 m/s), which leaves margin for feedback |
+| `configs/helix_rotor_wind.yaml` | Inherits helix: turns off the center-of-mass OU force and applies a world-frame wind field to the rotors instead (an OU example that is random only along the x axis; the coefficients are nominal values with their sources noted) |
 
-子文件用 `extends: <相对路径>` 继承父文件，只写差异：
+A child file inherits from a parent file with `extends: <relative path>` and only needs to write the differences:
 
-- 映射（mapping）逐层合并；列表和标量整体替换。
-- 若子文件某段的 `kind` 与父文件不同（例如 `trajectory.kind: hold → helix`），这一段**整段替换**，不会继承旧类型的参数。
-- 支持多级继承，循环继承会报错。
+- Mappings are merged level by level, while lists and scalars are replaced as a whole.
+- If the `kind` of a section in the child file differs from the parent (for example `trajectory.kind: hold → helix`), the **whole section is replaced** and the parameters of the old kind are not inherited.
+- Multi-level inheritance is supported. Circular inheritance raises an error.
 
-新实验的推荐做法：复制一个最接近的文件，改名，只保留要改的字段。
+For a new experiment, the recommended way is to copy the closest file, rename it, and keep only the fields that need to change.
 
-## 2. 命令行覆盖
+## 2. Command-line overrides
 
-所有命令都接受 `--set 键路径=值`（可重复），值按 YAML 解析：
+All commands accept `--set key.path=value` (can be repeated), and the value is parsed as YAML:
 
 ```bash
 python -m isaac_drone run --backend synthetic --config configs/helix.yaml \
     --set controller.position_kp=[10,10,6] --set trajectory.turns=3 --set simulation.seed=1
-# 整段替换：换成定点悬停，并关闭完成判据
+# Replace a whole section: switch to hold and turn off the completion criterion
 python -m isaac_drone run --backend synthetic --config configs/helix.yaml \
     --set 'trajectory={kind: hold}' --set completion=null
 ```
 
-覆盖后的完整配置会写进运行目录的 `config.json`，命令行本身记在 `metadata.json` 的 `provenance.argv`（另有 git commit 与是否有未提交修改）。
+The full config after overrides is written to `config.json` in the run directory. The command line itself is recorded in `provenance.argv` of `metadata.json`, together with the git commit and whether there were uncommitted changes.
 
-## 3. 各段含义
+## 3. What each config section means
 
-| 段 | 作用 |
+| Section | Purpose |
 |---|---|
-| `simulation` | 物理步长 `dt`、控制降频、渲染间隔、设备、重力、随机种子、时长、原生 SimulationCfg 覆盖 |
-| `recording` | 可选多机位视频（仅 isaaclab 后端），见 README |
-| `vehicle` | 资产、旋翼方向及其来源、转子惯量 `rotor_inertia_kg_m2`（陀螺力矩，默认 null 关闭）、电机响应模型开关 `motor_model_enabled`（默认 false：转速当步等于指令，无响应延迟；true：原生一阶滞后，按 `tau_inc_range`/`tau_dec_range`）、推进器参数、初态、`launch`（地面起飞、离地间隙、`spin_up_s` 起转时长）、原生/USD 覆盖 |
-| `limits` | 控制器和轨迹规划**共用**的飞行包线：`max_tilt_rad`、`max_yaw_rate_rad_s`、`max_acceleration_m_s2` |
-| `controller` | `kind` + 该控制器的参数（见第 4 节） |
-| `allocation` | 有界加权分配的权重和正则化 |
-| `trajectory` | `kind` + 该轨迹的参数（见第 5 节） |
-| `completion` | 终点悬停完成判据；`null` 表示不设判据（跑完所有步即成功） |
-| `effects` | 常值外力/力矩、`ou_wrench` 随机外扰（力世界系、力矩机体系，均值 + 逐轴标准差 + 相关时间）、风场 `wind`、风作用到旋翼 `rotor_wind`、气动阻力；`ou_wrench` 默认开启（力均值 [1,0,0] N、各轴标准差 0.5 N、τ=1 s；`helix.yaml` 从起转结束 2 s 起作用），其余默认关闭。风场与风作用到旋翼见下文 |
-| `model_mismatch` | 对象实际值 / 控制器标称值之比：`mass_ratio`、`inertia_ratio`、`thrust_coefficient_ratio`、`reaction_torque_ratio`；全为 1 时无失配，默认全为 1（关闭） |
-| `scene` / `logging` | 地面与灯光；日志目录、运行目录名里的实验名 `run_name`（`null` = YAML 文件名，目录名规则见 README「运行目录」）、记录间隔、刷新间隔 |
-| `sensors`（可选） | 由真值合成的 IMU、磁力计、气压计、GPS 读数及其误差模型（见下文）；省略时取 `configs/arl_robot_1.yaml` 的默认段（全部开启）。开关传感器不改变飞行结果 |
-| `estimation`（可选） | 控制器用哪个状态：`mode` 为 `truth`（默认，真值）、`shadow`（估计器在线运行并记录，控制器仍用真值）或 `closed_loop`（控制器用估计值）；`kind` 目前只有 `passthrough`（直接返回真值，用于验证链路），滤波器留待下一阶段 |
+| `simulation` | Physics step `dt`, control decimation, render interval, device, gravity, random seed, duration, native SimulationCfg overrides |
+| `recording` | Optional multi-view video (isaaclab backend only) |
+| `vehicle` | Asset, rotor directions and their source, rotor inertia `rotor_inertia_kg_m2` (gyroscopic torque; default null, off), motor response model switch `motor_model_enabled` (default false: the rotor speed equals the command within the same step, with no response delay; true: native first-order lag using `tau_inc_range`/`tau_dec_range`), thruster parameters, initial state, `launch` (ground takeoff, ground clearance, spin-up duration `spin_up_s`), native/USD overrides |
+| `limits` | Flight envelope **shared** by the controller and the trajectory planner: `max_tilt_rad`, `max_yaw_rate_rad_s`, `max_acceleration_m_s2` |
+| `controller` | `kind` + the parameters of that controller (see Section 4) |
+| `allocation` | Weights and regularization of the bounded weighted allocation |
+| `trajectory` | `kind` + the parameters of that trajectory (see Section 5) |
+| `completion` | Completion criterion for hovering at the end point; `null` means no criterion (the run succeeds once all steps finish) |
+| `effects` | Constant external force/torque, `ou_wrench` random disturbance (force in the world frame, torque in the body frame; mean + per-axis standard deviation + correlation time), wind field `wind`, wind acting on the rotors `rotor_wind`, aerodynamic drag. `ou_wrench` is on by default (force mean [1,0,0] N, standard deviation 0.5 N on each axis, τ=1 s; in `helix.yaml` it takes effect from 2 s, when spin-up ends), and the others are off by default. The wind field and wind acting on the rotors are described below |
+| `model_mismatch` | Ratio of the plant's actual value to the controller's nominal value: `mass_ratio`, `inertia_ratio`, `thrust_coefficient_ratio`, `reaction_torque_ratio`; all 1 means no mismatch, and the default is all 1 (off) |
+| `scene` / `logging` | Ground and lighting; log directory, the experiment name `run_name` used in the run directory name (`null` = the YAML file name), logging interval, flush interval |
+| `sensors` (optional) | IMU, magnetometer, barometer, and GPS readings synthesized from ground truth, with their error models (see below); when omitted, the default section in `configs/arl_robot_1.yaml` is used (all on). Turning sensors on or off does not change the flight result |
+| `estimation` (optional) | Which state the controller uses: `mode` is `truth` (default, ground truth), `shadow` (the estimator runs online and is recorded, while the controller still uses ground truth), or `closed_loop` (the controller uses the estimate); `kind` currently only has `passthrough` (returns ground truth directly, used to check the pipeline), and the filter is left for the next stage |
 
-`vehicle.launch.spin_up_s`：起转阶段参考保持起点，电机指令乘以 0→1 的平滑包络；轨迹在起转结束时刻才开始。地面起飞必须 > 0。地面起飞时轨迹锚定在后端真值（物理放置位置）；空中起始锚定在控制器看到的状态（可以是估计器输出）。
+`vehicle.launch.spin_up_s`: during spin-up, the reference stays at the start point and the motor command is multiplied by a smooth 0→1 envelope, and the trajectory starts only when spin-up ends. For ground takeoff this value must be > 0. For ground takeoff, the trajectory is anchored to the backend ground truth (the physical placement position); for an airborne start, it is anchored to the state the controller sees (which can be the estimator output).
 
-### 风场与风作用到旋翼（`effects.wind`、`effects.rotor_wind`）
+### Wind field and wind acting on the rotors (`effects.wind`, `effects.rotor_wind`)
 
-`wind` 生成世界系风速（m/s，写的是空气往哪走），`rotor_wind` 再按机体系把它分成两路作用到飞机上。两者默认关闭。
+`wind` generates the wind velocity in the world frame (in m/s, describing the direction the air moves toward). `rotor_wind` then splits this wind velocity into two parts in the body frame and applies them to the vehicle. Both are off by default.
 
-风场 = 平均风 `velocity_w_m_s` + 阵风 `gusts` + OU 湍流 `turbulence`（另可加线性梯度 `spatial_gradient_per_s`）：
+The wind field is the sum of the mean wind `velocity_w_m_s`, the gusts `gusts`, and the OU turbulence `turbulence`. A linear gradient `spatial_gradient_per_s` can also be added:
 
-- **时间窗** `start_time_s` / `end_time_s`：窗口外是静风，到 `start_time_s` 时风直接以满强度出现。OU 在复位时就按平稳分布取值，之后每个物理步都在演化，所以开窗那一刻湍流已经是满强度，不会从 0 慢慢长起来。`helix.yaml` 设为 2 s，即起转结束时。
-- **湍流** `turbulence.mode`：
-  - `axes`（默认）：每个世界轴一个独立 OU，`time_constant_s`、`stationary_std_w_m_s` 各写 3 个数。只随机一个轴，就把另外两个轴的标准差设为 0。
-  - `direction`：沿 `direction_w`（自动归一化）的单个 OU，`time_constant_s`、`stationary_std_w_m_s` 各写 1 个数。`[1, 0, 0]`、`[0, 1, 0]`、`[0, 0, 1]` 就是单轴，`[1, 1, 0]` 是水平 45°。
-- **阵风** `gusts`：每项写 `start_time_s`、`duration_s`、`delta_velocity_w_m_s`、`shape`。`one_minus_cosine`（默认）平滑升起再回落；`step` 在 `start_time_s` 瞬间出现，到时瞬间消失，`duration_s: null` 表示一直持续到结束。
+- **Time window** `start_time_s` / `end_time_s`: outside the window the air is still, and at `start_time_s` the wind appears at full strength. The OU process takes its value from the stationary distribution at reset and evolves at every physics step after that, so the turbulence is already at full strength when the window opens and does not grow gradually from 0. `helix.yaml` sets `start_time_s` to 2 s, which is when spin-up ends.
+- **Turbulence** `turbulence.mode`:
+  - `axes` (default): each world axis uses an independent OU process, and `time_constant_s` and `stationary_std_w_m_s` each take 3 numbers. To make only one axis random, set the standard deviation of the other two axes to 0.
+  - `direction`: a single OU process is used along `direction_w` (normalized automatically), and `time_constant_s` and `stationary_std_w_m_s` each take 1 number. `[1, 0, 0]`, `[0, 1, 0]`, and `[0, 0, 1]` mean a single axis, and `[1, 1, 0]` means 45° in the horizontal plane.
+- **Gusts** `gusts`: each item needs `start_time_s`, `duration_s`, `delta_velocity_w_m_s`, and `shape`. `one_minus_cosine` (default) rises smoothly and then falls back. `step` appears instantly at `start_time_s` and disappears instantly when the duration ends, and `duration_s: null` means it lasts until the end.
 
-风作用到旋翼（`rotor_wind`，需要 `wind.enabled`）按机体系分工，两路各有开关：
+When wind acts on the rotors (`rotor_wind`, which requires `wind.enabled` to be on first), it is split into two parts in the body frame, and each part has its own switch:
 
-- **沿桨轴**（`axial`）：把每个桨处的风转到机体系，取沿桨轴的分量 `u_axial,i`（上升气流为正），换算成等效转速偏移 `δΩ_i = c/2 · Ω_hover,i · u_axial,i`，在电机模型之后叠加：推力和反扭矩按 `k_f·(Ω_i + δΩ_i)²` 计算，电机状态本身不变。`c` 即 `thrust_gain_per_m_s`，是悬停时每 1 m/s 轴向风使每桨推力变化的比例，BEMT 线性化给出 `c = κ / v_h`；`Ω_hover,i` 是四桨均分重量时第 i 个桨的转速。偏移与当前转速无关，所以推力变化与转速成正比，而不是与推力成正比。
-- **桨盘平面内**（`inplane_drag`）：转速产生不了水平力，这部分作为阻力 `k · u_inplane` 加在质心、顺着风，`k` 即 `drag_n_per_m_s`。
-- 只算风本身，不算飞机自身运动带来的相对气流，所以静风时结果与不开风完全一样。线性模型在总风速约 3 m/s（约为悬停下洗速度的一半）以内可靠。
-- 系数没有默认值，必须显式填写并注明来源；`configs/helix_rotor_wind.yaml` 给出名义值及其推导来源。
+- **Along the rotor axis** (`axial`): the wind at each rotor is rotated into the body frame and its component along the rotor axis `u_axial,i` is taken (updraft is positive). It is converted into an equivalent rotor speed offset `δΩ_i = c/2 · Ω_hover,i · u_axial,i`, which is added after the motor model: thrust and reaction torque are computed from `k_f·(Ω_i + δΩ_i)²`, and the motor state itself does not change. `c` is `thrust_gain_per_m_s`, the fractional change in thrust per rotor for each 1 m/s of axial wind at hover, and BEMT linearization gives `c = κ / v_h`. `Ω_hover,i` is the speed of rotor i when the four rotors share the weight equally. The offset does not depend on the current rotor speed, so the thrust change is proportional to rotor speed, not to thrust.
+- **In the rotor disk plane** (`inplane_drag`): rotor speed cannot produce a horizontal force, so this part is applied at the center of mass as a drag `k · u_inplane` in the direction of the wind. `k` is `drag_n_per_m_s`.
+- Only the wind itself is included, not the relative airflow from the vehicle's own motion, so the result in still air is exactly the same as with wind turned off. The linear model is reliable up to a total wind speed of about 3 m/s (about half of the hover downwash velocity).
+- The coefficients have no default values. They must be filled in and their sources noted. `configs/helix_rotor_wind.yaml` gives nominal values and how they were derived.
 
-旧的质心 OU 力 `ou_wrench` 保留不变，可作对照组。
+The old center-of-mass OU force `ou_wrench` is kept unchanged and can be used as a control group.
 
 ```bash
-# 只在 z 轴随机的风，其余同 helix_rotor_wind.yaml
+# Wind that is random only along the z axis; everything else as in helix_rotor_wind.yaml
 python -m isaac_drone run --backend synthetic --config configs/helix_rotor_wind.yaml \
     --set 'effects.wind.turbulence.direction_w=[0,0,1]'
-# 沿同一方向扫风速标准差和种子
+# Sweep the wind speed standard deviation and the seed along the same direction
 python -m isaac_drone sweep --config configs/helix_rotor_wind.yaml \
     --grid 'effects.wind.turbulence.stationary_std_w_m_s=[0.5,1.0,1.5,2.0]' --grid 'simulation.seed=[0,1,2,3,4]'
-# 6 s 时突然出现 2 m/s 的下沉气流，持续 2 s
+# A 2 m/s downdraft that appears suddenly at 6 s and lasts 2 s
 python -m isaac_drone run --backend synthetic --config configs/helix_rotor_wind.yaml \
     --set 'effects.wind.gusts=[{start_time_s: 6.0, duration_s: 2.0, delta_velocity_w_m_s: [0, 0, -2], shape: step}]'
 ```
 
-### 传感器与状态估计（`sensors`、`estimation`）
+### Sensors and state estimation (`sensors`, `estimation`)
 
-`sensors` 在每个物理步末由步首/步末真值合成四种读数，写进 `telemetry.jsonl` 的 `sensors` 字段（docs/telemetry.md）。误差模型按 MATLAB 的 `imuSensor`（`accelparams` / `gyroparams` / `magparams`）、`altimeterSensor` 和 `gpsSensor` 文档复刻，参数名与 MATLAB 一一对应（小写下划线），默认值取 Pixhawk 6C 上的器件：ICM-42688-P、IST8310、MS5611 和 ZED-F9P 档 RTK。公式见 docs/architecture.md 第 5 节。
+At the end of each physics step, `sensors` synthesizes four kinds of readings from the ground truth at the start and end of the step and writes them to the `sensors` field of `telemetry.jsonl` (see docs/telemetry.md). The error models follow the MATLAB documentation for `imuSensor` (`accelparams` / `gyroparams` / `magparams`), `altimeterSensor`, and `gpsSensor`. The parameter names match MATLAB one to one (in lowercase with underscores), and the default values are taken from the devices on the Pixhawk 6C: ICM-42688-P, IST8310, MS5611, and ZED-F9P-class RTK. For the formulas, see Section 5 of docs/architecture.md.
 
-通用规则：
+General rules:
 
-- 每个传感器都有 `enabled`、`rate_hz`、`delay_s`。采样率必须整除物理步频 1/dt（200 Hz 下可取 200、100、50、40、25、20、10 …），延迟必须是 dt 的整数倍（GPS 默认 0.12 s = 24 步）。
-- 安装位置 `position_b_m` 相对根链接（`base_link`）原点，杆臂相对质心由后端质量属性自动算出（IMU 默认在原点，杆臂 r = −com_b）；`orientation_rpy_rad` 是传感器系相对机体系的 Z-Y-X 欧拉角。
-- 随机数从 `SeedSequence([simulation.seed, 固定域标识])` 派生，每个传感器一条子流，与风场/OU 扰动用的 `SeedSequence(seed)` 不重合，所以 `simulation.seed` 同时决定扰动和传感器噪声，而打开/关闭/改参传感器不改变飞行。
-- `noise_type`：手册给的（单边）谱密度对应 MATLAB 默认的 `double-sided`，每样本 σ = 密度·√(fs/2)（200 Hz 时 10 × 密度）；`single-sided` 为 σ = 密度·√fs。
+- Every sensor has `enabled`, `rate_hz`, and `delay_s`. The sample rate must divide the physics step rate 1/dt (at 200 Hz it can be 200, 100, 50, 40, 25, 20, 10 …), and the delay must be an integer multiple of dt (the GPS default is 0.12 s = 24 steps).
+- The mounting position `position_b_m` is relative to the origin of the root link (`base_link`). The lever arm relative to the center of mass is computed automatically from the backend's mass properties (the IMU is at the origin by default, so the lever arm is r = −com_b). `orientation_rpy_rad` is the Z-Y-X Euler angles of the sensor frame relative to the body frame.
+- Random numbers are derived from `SeedSequence([simulation.seed, fixed domain tag])`, with one substream per sensor, and they do not overlap with the `SeedSequence(seed)` used by the wind field/OU disturbance. So `simulation.seed` determines both the disturbance and the sensor noise, while turning sensors on or off or changing sensor parameters does not change the flight result.
+- `noise_type`: the (one-sided) spectral density given in datasheets corresponds to MATLAB's default `double-sided`, where the per-sample σ = density·√(fs/2) (10 × density at 200 Hz); for `single-sided`, σ = density·√fs.
 
-| 段 | 内容 |
+| Section | Contents |
 |---|---|
-| `imu.accelerometer` / `imu.gyroscope` | MATLAB 参数：`measurement_range`（`null` = 不饱和）、`resolution`（0 = 不量化）、`constant_bias`、`axes_misalignment`（百分比：标量 = 全部非对角元，3 元向量或 3×3 矩阵同 MATLAB 规则）、`noise_density`、`bias_instability`、`random_walk`、`noise_type`、`temperature_bias`、`temperature_scale_factor`，陀螺另有 `acceleration_bias`（g 敏感性，乘传感器系比力）。`bias_instability` 是高斯-马尔可夫过程的平稳标准差，`bias_instability_time_constant_s` 是相关时间（MATLAB 用 1/f 滤波，这里不复现逐点样本，只复现统计量）。`temperature_c` 偏离 25 °C 时温漂和温度标度项才非零 |
-| `imu.vibration` | MATLAB 之外的旋翼振动项：加速度计/陀螺白噪声标准差（悬停时的值），`scale_with_thrust: true` 时按总推力/重量缩放 |
-| `magnetometer` | `field_w_ut` 世界系（ENU）地磁场常量；`motor_interference_b_ut_per_n15` 电机电流干扰系数，乘 Σ T_i^1.5（`applied_thrust_n`）；`model` 为 magparams 同名参数 |
-| `barometer` | `altimeterSensor`：`constant_bias_m`、`noise_density_m_sqrt_hz`、`bias_instability_m`、`decay_factor`。零偏不稳定性递推 β(k) = decay·β(k−1) + σ·w，decay 0 为白噪声、1 为随机游走，平稳标准差 σ/√(1−decay²) |
-| `gps` | `gpsSensor`：`profile` 为 `rtk` 或 `standard`，四个数值项（`horizontal_accuracy_m`、`vertical_accuracy_m`、`velocity_accuracy_m_s`、`decay_factor`）写 `null` 取档位值、写数字覆盖。位置误差逐轴 e(k) = decay·e(k−1) + σ·w，速度误差白噪声；输出天线的本地 ENU 位置/速度 |
+| `imu.accelerometer` / `imu.gyroscope` | MATLAB parameters: `measurement_range` (`null` = no saturation), `resolution` (0 = no quantization), `constant_bias`, `axes_misalignment` (in percent: a scalar = all off-diagonal elements; a 3-element vector or 3×3 matrix follows the MATLAB rules), `noise_density`, `bias_instability`, `random_walk`, `noise_type`, `temperature_bias`, `temperature_scale_factor`; the gyroscope also has `acceleration_bias` (g-sensitivity, multiplied by the specific force in the sensor frame). `bias_instability` is the stationary standard deviation of a Gauss-Markov process, and `bias_instability_time_constant_s` is its correlation time (MATLAB uses a 1/f filter; here only the statistics are reproduced, not the sample-by-sample values). The temperature bias and temperature scale factor terms are nonzero only when `temperature_c` differs from 25 °C |
+| `imu.vibration` | Rotor vibration term that is not part of MATLAB: white-noise standard deviation of the accelerometer/gyroscope (value at hover); with `scale_with_thrust: true` it scales with total thrust/weight |
+| `magnetometer` | `field_w_ut` is the constant geomagnetic field in the world frame (ENU); `motor_interference_b_ut_per_n15` is the motor current interference coefficient, multiplied by Σ T_i^1.5 (`applied_thrust_n`); `model` holds the parameters with the same names as in magparams |
+| `barometer` | `altimeterSensor`: `constant_bias_m`, `noise_density_m_sqrt_hz`, `bias_instability_m`, `decay_factor`. The bias instability follows the recursion β(k) = decay·β(k−1) + σ·w; decay 0 gives white noise and 1 gives a random walk, and the stationary standard deviation is σ/√(1−decay²) |
+| `gps` | `gpsSensor`: `profile` is `rtk` or `standard`. For the four numeric items (`horizontal_accuracy_m`, `vertical_accuracy_m`, `velocity_accuracy_m_s`, `decay_factor`), `null` uses the profile value and a number overrides it. The position error on each axis is e(k) = decay·e(k−1) + σ·w, and the velocity error is white noise; the output is the local ENU position/velocity of the antenna |
 
 ```bash
-# 只换普通 GPS 档，并让估计器旁路运行（控制器仍用真值）
+# Switch only to the standard GPS profile and run the estimator in shadow mode (the controller still uses ground truth)
 python -m isaac_drone run --backend synthetic --config configs/helix.yaml \
     --set sensors.gps.profile=standard --set estimation.mode=shadow
-# 闭环用估计值（目前只有 passthrough，结果应与 truth 完全一致）
+# Close the loop on the estimate (only passthrough exists for now, so the result should be exactly the same as truth)
 python -m isaac_drone run --backend synthetic --config configs/helix.yaml --set estimation.mode=closed_loop
-# 关掉传感器（飞行结果不变，只是不记录读数）
+# Turn off the sensors (the flight result does not change; the readings are just not recorded)
 python -m isaac_drone run --backend synthetic --set sensors.enabled=false
 ```
 
-空中起始时 `closed_loop` 的轨迹锚定在估计器 t=0 的输出；helix 要求起始角速度小于 0.001 rad/s，带噪声的估计值可能在 reset 时就报错，接入真正的滤波器时要处理初始化（先对准再放行）。
+For an airborne start, the `closed_loop` trajectory is anchored to the estimator output at t=0. The helix requires the initial angular speed to be below 0.001 rad/s, and a noisy estimate may raise an error at reset, so initialization has to be handled when a real filter is connected (align first, then release).
 
-## 4. 控制器
+## 4. Controller
 
-### `geometric`：几何控制（Lee SO(3)，唯一控制器）
+### `geometric`: geometric control (Lee SO(3), the only controller)
 
-位置环 PID + SO(3) 姿态 PD，含 jerk/snap 与完整惯量前馈。
+This controller consists of a position-loop PID and an SO(3) attitude PD, and includes jerk/snap and full-inertia feedforward.
 
-| 参数 | 含义 |
+| Parameter | Meaning |
 |---|---|
-| `position_kp` [s⁻²] | P：位置误差 → 加速度 |
-| `velocity_kd` [s⁻¹] | D：速度误差 → 加速度 |
-| `position_ki` [s⁻³] | I：位置误差积分 → 加速度；默认开启（基础配置 `[1.5, 1.5, 0.5]`，`helix.yaml` `[2, 2, 0.5]`），某轴填 0 即关闭该轴积分 |
-| `integral_limit_m_s` [m·s] | 位置误差积分的逐轴上限；分配饱和或推力方向被限幅时积分不再增长 |
-| `attitude_kp` [N·m/rad]、`angular_rate_kd` [N·m·s/rad] | 姿态环 PD 的直接力矩增益（姿态环没有积分项） |
+| `position_kp` [s⁻²] | P: position error → acceleration |
+| `velocity_kd` [s⁻¹] | D: velocity error → acceleration |
+| `position_ki` [s⁻³] | I: integral of position error → acceleration; on by default (base config `[1.5, 1.5, 0.5]`, `helix.yaml` `[2, 2, 0.5]`); set an axis to 0 to turn off the integral on that axis |
+| `integral_limit_m_s` [m·s] | Per-axis upper limit of the position error integral; the integral stops growing when allocation saturates or the thrust direction is limited |
+| `attitude_kp` [N·m/rad], `angular_rate_kd` [N·m·s/rad] | Direct torque gains of the attitude-loop PD (the attitude loop has no integral term) |
 
-`helix.yaml` 的位置环 PID（kp `[20, 20, 16]`、kd `[9, 9, 7]`、ki `[2, 2, 0.5]`）是 2026-10-20 在 Isaac 里按无扰动 helix 的同一时刻跟踪误差调的：误差随 D 单调下降，但 D 越大，OU 力扰动下对反馈力的数值微分越会让电机饱和（σ=2 N 时 kd 9 为 1.1%，kd 20 为 14%），所以取 kd 9；kp 对无扰动误差几乎无影响；ki 越小越好，取测试过的最小值。理想双积分器闭环 `s³ + kd s² + kp s + ki` 的稳定上限是 `ki < kp·kd`。
+The position-loop PID in `helix.yaml` (kp `[20, 20, 16]`, kd `[9, 9, 7]`, ki `[2, 2, 0.5]`) was tuned in Isaac on 2026-10-20, using the tracking error at the same time instants of the undisturbed helix. The error decreases monotonically with D, but the larger D is, the more easily the numerical differentiation of the feedback force under the OU force disturbance saturates the motors (at σ=2 N, 1.1% for kd 9 and 14% for kd 20), so kd 9 was chosen. kp has almost no effect on the undisturbed error. The smaller ki is, the better, so the smallest tested value was chosen. For the ideal double-integrator closed loop `s³ + kd s² + kp s + ki`, the stability limit is `ki < kp·kd`.
 
-## 5. 轨迹
+## 5. Trajectory
 
-轨迹由若干**几何段**组成，每段按一个从静止到静止的时间律走完，最后在终点无限期悬停（阶段名 `hold`）。时长填数字 → 九次多项式（C4）；填 `null` → 按实际质量、惯量、分配矩阵、推力上下限和电机滞后规划“加速—巡航—减速”最短时间（需要 `thrust_utilization`）。所有段在飞行前都做名义可行性筛查（推力、倾角、偏航速率、加速度）。
+A trajectory is made of several **geometric segments**. Each segment is traversed with a rest-to-rest time law, and at the end the vehicle hovers at the end point indefinitely (phase name `hold`). When the duration is a number, a ninth-degree polynomial (C4) is used; when it is `null`, the minimum time of an "accelerate-cruise-decelerate" profile is planned from the actual mass, inertia, allocation matrix, thrust limits, and motor lag (this requires `thrust_utilization`). All segments go through nominal feasibility screening before the flight (thrust, tilt, yaw rate, acceleration).
 
 ### `hold`
 
-`position_w_m`（`null` = reset 后真实质心）、`yaw_rad`（`null` = 实际朝向）。
+The parameters are `position_w_m` (`null` means the actual center of mass after reset) and `yaw_rad` (`null` means the actual heading).
 
 ### `helix`
 
-阶段 `takeoff`（原地垂直升高）→ `helix`（恒定半径圆柱螺旋上升）→ `hold`。参数：`takeoff_height_m`、`takeoff_duration_s`、`radius_m`、`turns`（正数从 +Z 看逆时针，可为负数或小数）、`climb_height_m`、`helix_duration_s`、`initial_phase_rad`、`yaw_mode`（`fixed`/`tangent`）、`yaw_offset_rad`、`thrust_utilization`、`rest_speed_tolerance_m_s`、`rest_angular_speed_tolerance_rad_s`（reset 时要求静止）。数学推导见 [spiral_math.md](spiral_math.md)。
+The phases are, in order, `takeoff` (vertical climb in place), `helix` (cylindrical helix climb with constant radius), and `hold`. The parameters are: `takeoff_height_m`, `takeoff_duration_s`, `radius_m`, `turns` (positive is counterclockwise seen from +Z; can be negative or fractional), `climb_height_m`, `helix_duration_s`, `initial_phase_rad`, `yaw_mode` (`fixed`/`tangent`), `yaw_offset_rad`, `thrust_utilization`, `rest_speed_tolerance_m_s`, `rest_angular_speed_tolerance_rad_s` (the vehicle must be at rest at reset). For the math, see [spiral_math.md](spiral_math.md).
 
-## 6. 新增控制器或轨迹
+## 6. Adding a controller or trajectory
 
-两类插件都是“参数 dataclass + 注册的工厂函数”，参数由 `isaac_drone.core.params` 严格解析（支持 `float`、`int`、`bool`、`str`、`Literal`、`Vec3`、`X | None` 等），范围检查写在 `__post_init__` 里。
+Both kinds of plugins consist of a parameter dataclass and a registered factory function. The parameters are strictly parsed by `isaac_drone.core.params` (which supports `float`, `int`, `bool`, `str`, `Literal`, `Vec3`, `X | None`, and so on), and range checks go in `__post_init__`.
 
-**控制器**（`isaac_drone/control/my_controller.py`，并在 `control/__init__.py` 里 import 一次以完成注册）：
+**Controller** (`isaac_drone/control/my_controller.py`; import it once in `control/__init__.py` to register it):
 
 ```python
 @dataclass(frozen=True)
@@ -157,25 +157,25 @@ class MyGains:
     kp: Vec3
 
 class MyController:
-    output = "wrench"            # 或 "rotor_thrust"：直接输出每桨推力（如学习策略），只做上下限裁剪
-    def __init__(self, gains, vehicle, limits): ...   # vehicle: 实际质量/惯量/分配矩阵/推力上下限/控制周期
+    output = "wrench"            # or "rotor_thrust": outputs per-rotor thrust directly (e.g. a learned policy), only clipped to the limits
+    def __init__(self, gains, vehicle, limits): ...   # vehicle: actual mass/inertia/allocation matrix/thrust limits/control period
     def reset(self): ...
-    def compute(self, state, setpoint, dt_s): ...      # 返回 Wrench（机体系、绕质心）或每桨推力
-    def notify_allocation(self, result): ...           # 分配结果，用于抗积分饱和；可忽略
-    def diagnostics(self): ...                         # 期望姿态/角速度（写入遥测）及任意明细
+    def compute(self, state, setpoint, dt_s): ...      # returns a Wrench (body frame, about the center of mass) or per-rotor thrust
+    def notify_allocation(self, result): ...           # allocation result, used for anti-windup; can be ignored
+    def diagnostics(self): ...                         # desired attitude/angular velocity (written to telemetry) and any other details
 
 @CONTROLLERS.register("my_controller", params=MyGains)
 def build(params, *, vehicle, limits):
     return MyController(params, vehicle, limits)
 ```
 
-也可以不注册，直接把控制器实例传给 `MotionControlLoop(config, backend, controller=...)`。
+It is also possible to skip registration and pass a controller instance directly to `MotionControlLoop(config, backend, controller=...)`.
 
-**轨迹**：继承 `SegmentedTrajectory`，实现 `_build(position_w, yaw_rad)`，返回 `(段列表, 终点位置, 终点偏航)`。每个 `Segment` 给出 `setpoint(progress)`（进度及其 1–4 阶导数 → 位置到 snap 与偏航）、路径长度、偏航变化量、时长（`None` 为最短时间）。这样就自动获得最短时间规划、可行性筛查、阶段划分、完成判据、轨迹叠加显示和按阶段统计的指标。参考 `trajectories/helix.py`。
+**Trajectory**: a new trajectory needs to inherit from `SegmentedTrajectory`, implement `_build(position_w, yaw_rad)`, and return `(segment list, end position, end yaw)`. Each `Segment` needs to provide `setpoint(progress)` (which maps the progress and its 1st–4th derivatives to position through snap and yaw), the path length, the yaw change, and the duration (`None` means minimum-time). It then gets minimum-time planning, feasibility screening, phase division, the completion criterion, trajectory overlay display, and per-phase metrics automatically. See `trajectories/helix.py` for reference.
 
-## 7. 批量实验
+## 7. Batch experiments
 
-鲁棒性实验按 Kidambi（IEEE Access 2025）的方式扫参数失配与扰动强度，例如：
+Robustness experiments follow the approach of Kidambi (IEEE Access 2025) and sweep over parameter mismatch and disturbance strength, for example:
 
 ```bash
 python -m isaac_drone sweep --config configs/helix_moderate.yaml --grid model_mismatch.mass_ratio=[0.75,0.9,1.0,1.15,1.3]
@@ -184,26 +184,26 @@ python -m isaac_drone sweep --config configs/helix_moderate.yaml --set effects.o
 ```
 
 ```bash
-# 网格扫参（CPU 合成后端，多进程并行）：每个点都是完整运行目录
+# Grid sweep (CPU synthetic backend, multiple processes in parallel): each point is a full run directory
 python -m isaac_drone sweep --config configs/helix.yaml \
     --grid 'controller.position_ki=[[0,0,0],[3,3,2],[6,6,4]]' \
     --grid 'controller.velocity_kd=[[6,6,4],[7,7,5]]' \
     --rank helix.position_error_max_m
-# 对比几次运行（可只比某个阶段）
+# Compare several runs (a single phase can be compared on its own)
 python -m isaac_drone compare runs/<A> runs/<B> --labels no_integral integral --phase helix
 ```
 
-扫参开始前会先校验所有点的配置；单个点发散只记为失败，不会中断整个扫参。结果写在 `runs/sweep_<月日-时分>/summary.{csv,json,md}`，按 `--rank` 指标升序排列；每个点的运行目录是 `points/<序号>/`，序号即 summary 里的 `index` 列；指标名见 `isaac_drone/analysis/metrics.py`（整体指标直接写名字，分阶段写 `阶段名.指标名`）。
+Before a sweep starts, the configs of all points are validated. If a single point diverges, it is only recorded as failed and the sweep continues. The results are written to `runs/sweep_<MMDD-HHMM>/summary.{csv,json,md}`, sorted in ascending order of the `--rank` metric. The run directory of each point is `points/<index>/`, where the index is the `index` column in the summary. For metric names, see `isaac_drone/analysis/metrics.py` (write the name directly for an overall metric, and `phase.metric` for a per-phase metric).
 
-## 8. 从 schema_version 1 迁移
+## 8. Migrating from schema_version 1
 
 | v1 | v2 |
 |---|---|
-| `control:`（增益 + 限制混在一起） | `limits:`（`max_tilt_rad`、`max_yaw_rate_rad_s`、`max_acceleration_m_s2`）+ `controller: {kind: geometric, 增益}` |
-| `trajectory: {kind, hold: {...}, spiral: {...}, completion: {...}}` | `trajectory: {kind: hold/helix, 该类参数}` + 顶层 `completion:` |
+| `control:` (gains and limits mixed together) | `limits:` (`max_tilt_rad`, `max_yaw_rate_rad_s`, `max_acceleration_m_s2`) + `controller: {kind: geometric, gains}` |
+| `trajectory: {kind, hold: {...}, spiral: {...}, completion: {...}}` | `trajectory: {kind: hold/helix, parameters of that kind}` + top-level `completion:` |
 | `trajectory.spiral.start_delay_s` | `vehicle.launch.spin_up_s` |
 | `spiral_duration_s` | `helix_duration_s` |
-| `initial_speed_tolerance_m_s`、`initial_angular_speed_tolerance_rad_s` | `rest_speed_tolerance_m_s`、`rest_angular_speed_tolerance_rad_s` |
-| `kind: spiral` 别名 | 已删除，用 `helix` |
-| `configs/arl_robot_1_helix.yaml` | `configs/helix.yaml`（`extends: arl_robot_1.yaml`） |
-| 遥测 `mission_phase`：`delay/takeoff/spiral/hold` | `spin_up/takeoff/helix/hold` |
+| `initial_speed_tolerance_m_s`, `initial_angular_speed_tolerance_rad_s` | `rest_speed_tolerance_m_s`, `rest_angular_speed_tolerance_rad_s` |
+| `kind: spiral` alias | Removed; use `helix` |
+| `configs/arl_robot_1_helix.yaml` | `configs/helix.yaml` (`extends: arl_robot_1.yaml`) |
+| Telemetry `mission_phase`: `delay/takeoff/spiral/hold` | `spin_up/takeoff/helix/hold` |
