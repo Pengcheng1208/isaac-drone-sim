@@ -6,7 +6,7 @@ Replace `<SERVER_PUBLIC_IP>` in the commands below with the public IP of the ser
 
 ```bash
 sudo apt install git-lfs && git lfs install
-git clone https://github.com/Desmond-Yuka/isaac-drone-sim.git ~/isaac-drone-sim
+git clone https://github.com/Pengcheng1208/isaac-drone-sim.git ~/isaac-drone-sim
 cd ~/isaac-drone-sim
 source ~/isaacsim-6.1/env_isaacsim/bin/activate
 python -m pip install -e '.[plot]'          # add '.[video]' for video recording
